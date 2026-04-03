@@ -166,7 +166,7 @@ def move-sql [platform: string, source_game_id: string, ply: int, move_san: stri
   ["INSERT INTO game_positions (game_id, ply, move_san, move_uci, position_before_id, position_after_id, mover_account_id) VALUES ((SELECT id FROM games WHERE platform = ", $platform_q, " AND source_game_id = ", $source_q, "), ", ($ply | into string), ", ", $move_san_q, ", ", $move_uci_q, ", (SELECT id FROM positions WHERE canonical_hash = ", $before_q, "), (SELECT id FROM positions WHERE canonical_hash = ", $after_q, "), ", $mover_id, ");"] | str join
 }
 
-def import-one-game [platform: string, source_game_id: string, raw_pgn: string, cfg: record] {
+def import-one-game [platform: string, source_game_id: string, raw_pgn: string, cfg: record, db] {
   let headers = (parse-pgn-headers $raw_pgn)
   let result = ($headers | get -o Result | default "*")
   let white = ($headers | get -o White | default "")
@@ -189,39 +189,45 @@ def import-one-game [platform: string, source_game_id: string, raw_pgn: string, 
   let sql_parts = ($sql_parts | append (color-stats-sql $start_pos.canonical_hash $result))
   let sql_parts = ($sql_parts | append (player-stats-sql $start_pos.canonical_hash $me_username $white $black $result $platform))
 
-  let replay = (
-    $rows
-    | reduce -f {
-        sql_parts: $sql_parts
-        previous_fen: $initial_fen
-        previous_hash: $start_pos.canonical_hash
-      } { |row, acc|
-        let before_pos = (position-upsert-sql $acc.previous_fen)
-        let after_pos = (position-upsert-sql $row.fen)
-        let mover = if $row.color == "white" { $white } else { $black }
+  let replay = ($rows | reduce -f {
+    sql_parts: $sql_parts
+    seen_positions: [$start_pos.canonical_hash]
+    previous_fen: $initial_fen
+    previous_hash: $start_pos.canonical_hash
+  } { |row, acc|
+    let before_pos = (position-upsert-sql $acc.previous_fen)
+    let after_pos = (position-upsert-sql $row.fen)
+    let mover = if $row.color == "white" { $white } else { $black }
+    let before_seen = ($acc.seen_positions | any { |h| $h == $before_pos.canonical_hash })
+    let after_seen = ($acc.seen_positions | any { |h| $h == $after_pos.canonical_hash })
+    let before_color_sql = if $before_seen { "" } else { (color-stats-sql $before_pos.canonical_hash $result) }
+    let before_player_sql = if $before_seen { "" } else { (player-stats-sql $before_pos.canonical_hash $me_username $white $black $result $platform) }
+    let after_color_sql = if $after_seen { "" } else { (color-stats-sql $after_pos.canonical_hash $result) }
+    let after_player_sql = if $after_seen { "" } else { (player-stats-sql $after_pos.canonical_hash $me_username $white $black $result $platform) }
 
-        {
-          sql_parts: (
-            $acc.sql_parts
-            | append $before_pos.sql
-            | append (color-stats-sql $before_pos.canonical_hash $result)
-            | append (player-stats-sql $before_pos.canonical_hash $me_username $white $black $result $platform)
-            | append $after_pos.sql
-            | append (color-stats-sql $after_pos.canonical_hash $result)
-            | append (player-stats-sql $after_pos.canonical_hash $me_username $white $black $result $platform)
-            | append (move-sql $platform $source_game_id ($row.ply | into int) $row.san $row.uci $before_pos.canonical_hash $after_pos.canonical_hash $mover)
-          )
-          previous_fen: $row.fen
-          previous_hash: $after_pos.canonical_hash
-        }
-      }
-  )
+    {
+      sql_parts: (
+        $acc.sql_parts
+        | append $before_pos.sql
+        | append $before_color_sql
+        | append $before_player_sql
+        | append $after_pos.sql
+        | append $after_color_sql
+        | append $after_player_sql
+        | append (move-sql $platform $source_game_id ($row.ply | into int) $row.san $row.uci $before_pos.canonical_hash $after_pos.canonical_hash $mover)
+      )
+      seen_positions: ($acc.seen_positions | append $before_pos.canonical_hash | append $after_pos.canonical_hash)
+      previous_fen: $row.fen
+      previous_hash: $after_pos.canonical_hash
+    }
+  })
 
   let statements = ($replay.sql_parts | where { |stmt| not ($stmt | is-empty) })
 
   if (not ($statements | is-empty)) {
-    let db_path = ($cfg.database.path)
-    run-sql $db_path $statements
+    for stmt in $statements {
+      $db | query db $stmt | ignore
+    }
   }
 
   {
@@ -234,6 +240,8 @@ def import-one-game [platform: string, source_game_id: string, raw_pgn: string, 
 }
 
 def import-json-games [path: string, platform: string] {
+  let cfg = load-config
+  let db = (open-db $cfg.database.path)
   let payload = (open $path)
   let games = if ($payload | describe) == "list<record>" {
     $payload
@@ -247,7 +255,7 @@ def import-json-games [path: string, platform: string] {
       let idx = ($acc.index | into string)
       let source_game_id = (if ($row | columns | any { |c| $c == "id" }) { $row.id | into string } else if ($row | columns | any { |c| $c == "url" }) { $row.url | into string } else { $'($path)#($idx)' })
       let raw_pgn = (if ($row | columns | any { |c| $c == "pgn" }) { $row.pgn | into string } else { error make { msg: $'JSON row missing pgn field in ($path)' } })
-      let imported = (import-one-game $platform $source_game_id $raw_pgn (load-config))
+      let imported = (import-one-game $platform $source_game_id $raw_pgn $cfg $db)
 
       { index: ($acc.index + 1), results: ($acc.results | append $imported) }
     }
@@ -255,6 +263,8 @@ def import-json-games [path: string, platform: string] {
 }
 
 def import-pgn-file [path: string, platform: string] {
+  let cfg = load-config
+  let db = (open-db $cfg.database.path)
   let text = (open $path)
   let games = (split-pgn-games $text)
 
@@ -262,7 +272,7 @@ def import-pgn-file [path: string, platform: string] {
       let idx = ($acc.index | into string)
       let raw_pgn = ($item | str trim)
       let source_game_id = $'($path)#($idx)'
-      let imported = (import-one-game $platform $source_game_id $raw_pgn (load-config))
+      let imported = (import-one-game $platform $source_game_id $raw_pgn $cfg $db)
 
       { index: ($acc.index + 1), results: ($acc.results | append $imported) }
     }

@@ -25,9 +25,14 @@ def split-sql-statements [sql_text: string] {
 }
 
 export def run-sql [db_path: string, statements: list<string>] {
+  let db = (open $db_path)
   for stmt in $statements {
-    open $db_path | query db $stmt | ignore
+    $db | query db $stmt | ignore
   }
+}
+
+export def open-db [db_path: string] {
+  open $db_path
 }
 
 export def init-db [] {

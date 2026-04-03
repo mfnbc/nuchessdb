@@ -71,6 +71,12 @@ open ./data/nuchessdb.sqlite | query db "SELECT opponent, COUNT(*) AS games FROM
 open ./data/nuchessdb.sqlite | query db "SELECT opponent, AVG(opponent_elo) AS avg_elo FROM (SELECT CASE WHEN g.white_account_id = m.id THEN b.username ELSE w.username END AS opponent, CASE WHEN g.white_account_id = m.id THEN g.black_elo ELSE g.white_elo END AS opponent_elo FROM games g JOIN accounts m ON m.is_me = 1 AND (g.white_account_id = m.id OR g.black_account_id = m.id) LEFT JOIN accounts w ON w.id = g.white_account_id LEFT JOIN accounts b ON b.id = g.black_account_id) WHERE opponent_elo IS NOT NULL GROUP BY opponent ORDER BY avg_elo DESC LIMIT 50"
 ```
 
+## Benchmark
+
+```bash
+./main.nu bench chesscom all <your-username>
+```
+
 ## Related projects
 
 - `nu_plugin_shakmaty`: deterministic FEN, move, and hash operations.

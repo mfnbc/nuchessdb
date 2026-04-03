@@ -4,6 +4,18 @@ use ./import.nu *
 use ./sync.nu *
 use ./query.nu *
 
+def benchmark-sync [args: list<string>] {
+  let started = (date now)
+  let result = (sync-games $args)
+  let finished = (date now)
+
+  {
+    started: $started
+    finished: $finished
+    result: $result
+  }
+}
+
 export def run [args: list<string>] {
   let command = if ($args | is-empty) { "help" } else { $args.0 }
   let rest = if ($args | length) > 1 { $args | skip 1 } else { [] }
@@ -33,7 +45,8 @@ export def run [args: list<string>] {
       let limit = if ($rest | is-empty) { 50 } else { $rest | get 0 | into int }
       highest-rated-opponents $limit | to nuon | print
     }
-    "help" => { print "nuchessdb commands: init, import <path> [platform], sync chesscom [all] <username>, status, recent [limit], top [limit], report [limit], opponents [limit], rated [limit]" }
+    "bench" => { benchmark-sync $rest | to nuon | print }
+    "help" => { print "nuchessdb commands: init, import <path> [platform], sync chesscom [all] <username>, bench <sync-args...>, status, recent [limit], top [limit], report [limit], opponents [limit], rated [limit]" }
     _ => { print $'unknown command: ($command)' }
   }
 }
