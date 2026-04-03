@@ -35,6 +35,7 @@
 - chess.com exports may arrive as JSON with embedded PGN strings.
 - lichess exports may arrive as plain PGN.
 - The importer accepts either shape and stores the raw game text first.
+- `sync chesscom all <username>` downloads and imports every archive month.
 
 ## Principles
 

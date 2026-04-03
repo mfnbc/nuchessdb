@@ -26,22 +26,43 @@ def save-archive-pgn [username: string, archive_url: string] {
   { archive_url: $archive_url, pgn_url: $pgn_url, file: $out_file }
 }
 
+def sync-chesscom-latest [username: string] {
+  let archive_url = (latest-chesscom-archive $username)
+  let saved = (save-archive-pgn $username $archive_url)
+  let imported = (import-games [$saved.file "chesscom"])
+
+  { archive_url: $archive_url, saved: $saved, imported: $imported }
+}
+
+def sync-chesscom-all [username: string] {
+  let archives = (http get $'https://api.chess.com/pub/player/($username)/games/archives')
+
+  $archives.archives
+  | each { |archive_url|
+      let saved = (save-archive-pgn $username $archive_url)
+      let imported = (import-games [$saved.file "chesscom"])
+
+      { archive_url: $archive_url, saved: $saved, imported: $imported }
+    }
+}
+
 export def sync-games [args: list<string>] {
   if ($args | is-empty) {
     error make { msg: "sync requires a provider and username" }
   }
 
   let provider = ($args | get 0)
-  let username = (if ($args | length) > 1 { $args | get 1 } else { error make { msg: "sync requires a username" } })
+  let mode = (if ($args | length) > 1 { $args | get 1 } else { "latest" })
+  let username = (if ($args | length) > 2 { $args | get 2 } else { error make { msg: "sync requires a username" } })
 
   match $provider {
     "chesscom" => {
       init-db
-      let archive_url = (latest-chesscom-archive $username)
-      let saved = (save-archive-pgn $username $archive_url)
-      let imported = (import-games [$saved.file "chesscom"])
-
-      { provider: $provider, username: $username, archive_url: $archive_url, saved: $saved, imported: $imported }
+      if $mode == "all" {
+        { provider: $provider, mode: $mode, username: $username, archives: (sync-chesscom-all $username) }
+      } else {
+        { provider: $provider, mode: $mode, username: $username, archive: (sync-chesscom-latest $username) }
+      }
     }
     _ => { error make { msg: $'unknown sync provider: ($provider)' } }
   }
