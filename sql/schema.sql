@@ -88,3 +88,32 @@ CREATE TABLE IF NOT EXISTS annotations (
   FOREIGN KEY (position_id) REFERENCES positions(id),
   FOREIGN KEY (game_position_id) REFERENCES game_positions(id)
 );
+
+CREATE TABLE IF NOT EXISTS position_engine_evals (
+  id INTEGER PRIMARY KEY,
+  position_id INTEGER NOT NULL,
+  engine_name TEXT NOT NULL,
+  engine_model TEXT,
+  depth INTEGER,
+  nodes INTEGER,
+  centipawn INTEGER,
+  mate INTEGER,
+  best_move_uci TEXT,
+  best_move_san TEXT,
+  analysis_json TEXT,
+  created_at TEXT,
+  UNIQUE(position_id, engine_name, engine_model),
+  FOREIGN KEY (position_id) REFERENCES positions(id)
+);
+
+CREATE TABLE IF NOT EXISTS position_enrichment_queue (
+  position_id INTEGER PRIMARY KEY,
+  priority INTEGER NOT NULL DEFAULT 0,
+  source TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  queued_at TEXT,
+  started_at TEXT,
+  finished_at TEXT,
+  last_error TEXT,
+  FOREIGN KEY (position_id) REFERENCES positions(id)
+);

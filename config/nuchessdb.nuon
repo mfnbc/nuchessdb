@@ -10,6 +10,16 @@
     }
   }
   enrichment: {
+    engine: {
+      binary: ""
+      name: "stockfish"
+      model: ""
+      threads: 1
+      hash_mb: 128
+      depth: 12
+      nodes: 0
+      movetime_ms: 0
+    }
     llm_model: ""
     prompt_version: ""
   }

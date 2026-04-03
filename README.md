@@ -36,6 +36,7 @@
 - lichess exports may arrive as plain PGN.
 - The importer accepts either shape and stores the raw game text first.
 - `sync chesscom all <username>` downloads and imports every archive month.
+- `sync chesscom all <username>` uses a small NuON checkpoint in `./tmp/` to skip completed archives.
 
 ## Principles
 
@@ -76,6 +77,27 @@ open ./data/nuchessdb.sqlite | query db "SELECT opponent, AVG(opponent_elo) AS a
 ```bash
 ./main.nu bench chesscom all <your-username>
 ```
+
+## Enrichment Queue
+
+Queue the most-played positions first:
+
+```bash
+./main.nu enqueue 100
+./main.nu queue 20
+```
+
+## Engine Eval
+
+Configure your engine in `config/nuchessdb.nuon`, then run:
+
+```bash
+./main.nu eval 20
+./main.nu engine 20
+./main.nu qstats
+```
+
+The engine config supports a binary path plus model/depth knobs, so you can point it at Stockfish or lc0-style setups later.
 
 ## Related projects
 

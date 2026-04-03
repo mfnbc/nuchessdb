@@ -2,6 +2,37 @@ use ./config.nu *
 use ./db.nu *
 use ./import.nu *
 
+def sync-state-path [username: string] {
+  let state_dir = './tmp'
+  mkdir $state_dir
+  $'($state_dir)/sync-progress-($username).nuon'
+}
+
+def default-sync-state [username: string] {
+  {
+    provider: 'chesscom'
+    username: $username
+    completed_archives: []
+    current_archive: null
+    updated_at: null
+  }
+}
+
+def load-sync-state [username: string] {
+  let path = (sync-state-path $username)
+  if ($path | path exists) {
+    open $path
+  } else {
+    default-sync-state $username
+  }
+}
+
+def save-sync-state [username: string, state: record] {
+  let path = (sync-state-path $username)
+  $state | save --force $path
+  $state
+}
+
 def latest-chesscom-archive [username: string] {
   let archives = (http get $'https://api.chess.com/pub/player/($username)/games/archives')
   let url = ($archives.archives | last)
@@ -38,17 +69,35 @@ def sync-chesscom-latest [username: string] {
 def sync-chesscom-all [username: string] {
   let archives = (http get $'https://api.chess.com/pub/player/($username)/games/archives')
   let total = ($archives.archives | length)
+  let state = (load-sync-state $username)
+  let completed = ($state.completed_archives | default [])
 
   $archives.archives
   | enumerate
   | each { |it|
       let archive_url = $it.item
       let n = ($it.index + 1)
-      print $'sync: chesscom all ($username) ($n)/($total)'
-      let saved = (save-archive-pgn $username $archive_url)
-      let imported = (import-games [$saved.file "chesscom"])
+      let archive_id = ($archive_url | split row '/' | last 2 | str join '/')
 
-      { archive_url: $archive_url, saved: $saved, imported: $imported }
+      if ($completed | any { |a| $a == $archive_id }) {
+        print $'sync: chesscom all ($username) ($n)/($total) skip ($archive_id)'
+        { archive_url: $archive_url, archive_id: $archive_id, skipped: true }
+      } else {
+        print $'sync: chesscom all ($username) ($n)/($total) import ($archive_id)'
+        let next_state = ($state | upsert current_archive $archive_id)
+        save-sync-state $username $next_state | ignore
+        let saved = (save-archive-pgn $username $archive_url)
+        let imported = (import-games [$saved.file "chesscom"])
+        let finished_state = (
+          $next_state
+          | upsert completed_archives ($completed | append $archive_id)
+          | upsert current_archive null
+          | upsert updated_at (date now)
+        )
+
+        save-sync-state $username $finished_state | ignore
+        { archive_url: $archive_url, archive_id: $archive_id, skipped: false, saved: $saved, imported: $imported }
+      }
     }
 }
 
