@@ -1,0 +1,16 @@
+{
+  database: {
+    path: "./data/nuchessdb.sqlite"
+    schema: "./sql/schema.sql"
+  }
+  identity: {
+    me: {
+      chesscom: ""
+      lichess: ""
+    }
+  }
+  enrichment: {
+    llm_model: ""
+    prompt_version: ""
+  }
+}
