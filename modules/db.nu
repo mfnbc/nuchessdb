@@ -42,6 +42,14 @@ export def init-db [] {
   let schema = (open $schema_path)
   let statements = (split-sql-statements $schema)
   run-sql $db_path $statements
+  let columns = (open $db_path | query db "PRAGMA table_info(games)")
+  let names = ($columns | get name)
+  if (not ($names | any { |c| $c == "white_elo" })) {
+    run-sql $db_path ["ALTER TABLE games ADD COLUMN white_elo INTEGER;"]
+  }
+  if (not ($names | any { |c| $c == "black_elo" })) {
+    run-sql $db_path ["ALTER TABLE games ADD COLUMN black_elo INTEGER;"]
+  }
 
   { database: $db_path, schema: $schema_path, status: "initialized" }
 }

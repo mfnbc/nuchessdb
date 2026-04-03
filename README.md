@@ -54,6 +54,23 @@
 - Use NuON for import settings and prompt configuration.
 - Query and report directly from Nushell.
 
+## Direct DB Queries
+
+Use Nushell directly against the SQLite file for ad hoc inspection:
+
+```nu
+open ./data/nuchessdb.sqlite | query db "SELECT COUNT(*) AS games FROM games"
+open ./data/nuchessdb.sqlite | query db "SELECT platform, source_game_id, result FROM games ORDER BY id DESC LIMIT 10"
+open ./data/nuchessdb.sqlite | query db "SELECT canonical_hash, canonical_fen FROM positions ORDER BY id DESC LIMIT 5"
+```
+
+## Fun Queries
+
+```nu
+open ./data/nuchessdb.sqlite | query db "SELECT opponent, COUNT(*) AS games FROM (SELECT CASE WHEN g.white_account_id = m.id THEN b.username ELSE w.username END AS opponent FROM games g JOIN accounts m ON m.is_me = 1 AND (g.white_account_id = m.id OR g.black_account_id = m.id) LEFT JOIN accounts w ON w.id = g.white_account_id LEFT JOIN accounts b ON b.id = g.black_account_id) GROUP BY opponent ORDER BY games DESC LIMIT 10"
+open ./data/nuchessdb.sqlite | query db "SELECT opponent, AVG(opponent_elo) AS avg_elo FROM (SELECT CASE WHEN g.white_account_id = m.id THEN b.username ELSE w.username END AS opponent, CASE WHEN g.white_account_id = m.id THEN g.black_elo ELSE g.white_elo END AS opponent_elo FROM games g JOIN accounts m ON m.is_me = 1 AND (g.white_account_id = m.id OR g.black_account_id = m.id) LEFT JOIN accounts w ON w.id = g.white_account_id LEFT JOIN accounts b ON b.id = g.black_account_id) WHERE opponent_elo IS NOT NULL GROUP BY opponent ORDER BY avg_elo DESC LIMIT 50"
+```
+
 ## Related projects
 
 - `nu_plugin_shakmaty`: deterministic FEN, move, and hash operations.

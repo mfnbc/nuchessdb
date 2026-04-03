@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS games (
   result TEXT NOT NULL,
   time_control TEXT,
   played_at TEXT,
+  white_elo INTEGER,
+  black_elo INTEGER,
   raw_pgn TEXT NOT NULL,
   imported_at TEXT,
   UNIQUE(platform, source_game_id),

@@ -55,10 +55,14 @@ def game-insert-sql [platform: string, source_game_id: string, raw_pgn: string, 
   let black = ($headers | get -o Black | default "")
   let result = ($headers | get -o Result | default "*")
   let time_control = ($headers | get -o TimeControl | default "")
+  let white_elo = ($headers | get -o WhiteElo | default "")
+  let black_elo = ($headers | get -o BlackElo | default "")
   let platform_q = (sql-string $platform)
   let source_q = (sql-string $source_game_id)
   let result_q = (sql-string $result)
   let tc_q = (sql-string $time_control)
+  let white_elo_q = (sql-int $white_elo)
+  let black_elo_q = (sql-int $black_elo)
   let white_q = (sql-string $white)
   let black_q = (sql-string $black)
   let raw_q = (sql-string $raw_pgn)
@@ -75,8 +79,8 @@ def game-insert-sql [platform: string, source_game_id: string, raw_pgn: string, 
   let black_account = if ($black | is-empty) { "NULL" } else { ["(SELECT id FROM accounts WHERE platform = ", $platform_q, " AND username = ", $black_q, ")"] | str join }
 
   [
-    "INSERT INTO games (platform, source_game_id, white_account_id, black_account_id, result, time_control, played_at, raw_pgn, imported_at) VALUES (",
-    $platform_q, ", ", $source_q, ", ", $white_account, ", ", $black_account, ", ", $result_q, ", ", $tc_q, ", ", $played_at_q, ", ", $raw_q, ", datetime('now')) ON CONFLICT(platform, source_game_id) DO UPDATE SET white_account_id = excluded.white_account_id, black_account_id = excluded.black_account_id, result = excluded.result, time_control = excluded.time_control, played_at = excluded.played_at, raw_pgn = excluded.raw_pgn, imported_at = excluded.imported_at;"
+    "INSERT INTO games (platform, source_game_id, white_account_id, black_account_id, result, time_control, played_at, white_elo, black_elo, raw_pgn, imported_at) VALUES (",
+    $platform_q, ", ", $source_q, ", ", $white_account, ", ", $black_account, ", ", $result_q, ", ", $tc_q, ", ", $played_at_q, ", ", $white_elo_q, ", ", $black_elo_q, ", ", $raw_q, ", datetime('now')) ON CONFLICT(platform, source_game_id) DO UPDATE SET white_account_id = excluded.white_account_id, black_account_id = excluded.black_account_id, result = excluded.result, time_control = excluded.time_control, played_at = excluded.played_at, white_elo = excluded.white_elo, black_elo = excluded.black_elo, raw_pgn = excluded.raw_pgn, imported_at = excluded.imported_at;"
   ] | str join
 }
 

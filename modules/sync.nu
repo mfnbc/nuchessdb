@@ -27,6 +27,7 @@ def save-archive-pgn [username: string, archive_url: string] {
 }
 
 def sync-chesscom-latest [username: string] {
+  print $'sync: chesscom latest ($username)'
   let archive_url = (latest-chesscom-archive $username)
   let saved = (save-archive-pgn $username $archive_url)
   let imported = (import-games [$saved.file "chesscom"])
@@ -36,9 +37,14 @@ def sync-chesscom-latest [username: string] {
 
 def sync-chesscom-all [username: string] {
   let archives = (http get $'https://api.chess.com/pub/player/($username)/games/archives')
+  let total = ($archives.archives | length)
 
   $archives.archives
-  | each { |archive_url|
+  | enumerate
+  | each { |it|
+      let archive_url = $it.item
+      let n = ($it.index + 1)
+      print $'sync: chesscom all ($username) ($n)/($total)'
       let saved = (save-archive-pgn $username $archive_url)
       let imported = (import-games [$saved.file "chesscom"])
 
@@ -59,6 +65,7 @@ export def sync-games [args: list<string>] {
     "chesscom" => {
       init-db
       if $mode == "all" {
+        print $'sync: chesscom all ($username)'
         { provider: $provider, mode: $mode, username: $username, archives: (sync-chesscom-all $username) }
       } else {
         { provider: $provider, mode: $mode, username: $username, archive: (sync-chesscom-latest $username) }
