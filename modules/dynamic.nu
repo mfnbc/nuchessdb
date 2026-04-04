@@ -1,21 +1,5 @@
+use ./utils.nu *
 use ./config.nu *
-
-def sql-string [value: any] {
-  if $value == null {
-    "NULL"
-  } else {
-    let text = ($value | into string | str replace -a "'" "''")
-    $"'($text)'"
-  }
-}
-
-def sql-int [value: any] {
-  if $value == null {
-    "NULL"
-  } else {
-    $value | into string
-  }
-}
 
 def dynamic-config [] {
   let cfg = load-config
@@ -33,17 +17,17 @@ def dynamic-elo-tune [] {
 }
 
 def dynamic-engine-binary [] {
-  let cfg = load-config
-  let binary = ($cfg.enrichment.engine.binary | default "")
+  let dcfg = dynamic-config
+  let binary = ($dcfg.binary | default "")
   if ($binary | is-empty) {
-    error make { msg: "engine binary is not configured in config/nuchessdb.nuon" }
+    error make { msg: "enrichment.dynamic.binary is not configured in config/nuchessdb.nuon" }
   }
   $binary
 }
 
 def dynamic-depth [] {
-  let cfg = load-config
-  ($cfg.enrichment.engine.depth | default 12)
+  let dcfg = dynamic-config
+  ($dcfg.depth | default 12)
 }
 
 def ensure-dynamic-profile-id [db] {
@@ -54,7 +38,7 @@ def ensure-dynamic-profile-id [db] {
   let created_at_q = (sql-string (date now | format date "%Y-%m-%d %H:%M:%S"))
 
   $db | query db ([
-    "INSERT INTO dynamic_model_profiles (engine_name, elo_tune, created_at) VALUES (", $engine_name_q, ", ", $elo_q, ", ", $created_at_q, ") ON CONFLICT(engine_name, elo_tune) DO UPDATE SET created_at = excluded.created_at;"
+    "INSERT INTO dynamic_model_profiles (engine_name, elo_tune, created_at) VALUES (", $engine_name_q, ", ", $elo_q, ", ", $created_at_q, ") ON CONFLICT(engine_name, elo_tune) DO NOTHING;"
   ] | str join) | ignore
 
   let rows = ($db | query db ([
@@ -68,7 +52,7 @@ def ensure-dynamic-profile-id [db] {
   $rows.0.id
 }
 
-def refresh-dynamic-enrichment-queue [limit: int = 100000] {
+export def refresh-dynamic-enrichment-queue [limit: int = 100000] {
   let cfg = load-config
   let db = (open $cfg.database.path)
   let profile_id = (ensure-dynamic-profile-id $db)
@@ -81,7 +65,7 @@ def refresh-dynamic-enrichment-queue [limit: int = 100000] {
   { profile_id: $profile_id, engine_name: (dynamic-engine-name), elo_tune: (dynamic-elo-tune), queued: true }
 }
 
-def queued-dynamic-runs [limit: int = 50] {
+export def queued-dynamic-runs [limit: int = 50] {
   let cfg = load-config
   let db = (open $cfg.database.path)
 
@@ -90,18 +74,18 @@ def queued-dynamic-runs [limit: int = 50] {
   ] | str join)
 }
 
-def dynamic-queue-stats [] {
+export def dynamic-queue-stats [] {
   let cfg = load-config
   let db = (open $cfg.database.path)
 
   $db | query db "SELECT status, COUNT(*) AS count FROM position_dynamic_queue GROUP BY status ORDER BY status"
 }
 
-def dynamic-position-to-san [fen: string, uci: string] {
-  if ($uci | is-empty) {
+def dynamic-position-to-san [fen: string, uci: any] {
+  if ($uci == null or ($uci | is-empty)) {
     null
   } else {
-    echo $fen | shakmaty uci-to-san $uci
+    $fen | shakmaty uci-to-san $uci
   }
 }
 
@@ -141,9 +125,7 @@ def parse-dynamic-output [text: string] {
             move_uci: (($pv | split row " " | get 0?) | default null),
             q_cp: $score,
             q_mate: $mate,
-            value_cp: $score,
             pv: $pv,
-            raw: $line
           }
         }
       }
@@ -152,13 +134,12 @@ def parse-dynamic-output [text: string] {
   )
 
   let top_moves = ($parsed | values | sort-by rank)
-
   let top_move = ($top_moves | first?)
 
   {
     top_moves: $top_moves,
     best_move_uci: (if $bestmove_uci != null { $bestmove_uci } else if $top_move != null { $top_move.move_uci } else { null }),
-    value_cp: (if $top_move == null { null } else { $top_move.value_cp }),
+    value_cp: (if $top_move == null { null } else { $top_move.q_cp }),
     value_mate: (if $top_move == null { null } else { $top_move.q_mate }),
     analysis_json: $text,
   }
@@ -170,7 +151,7 @@ def save-dynamic-run [db, position_zobrist: string, profile_id: int, fen: string
   let best_move_san = (dynamic-position-to-san $fen $parsed.best_move_uci)
   let run_sql = ([
     "INSERT INTO position_dynamic_runs (position_zobrist, profile_id, position_fen, side_to_move, depth, nodes, value_cp, value_mate, best_move_uci, best_move_san, analysis_json, created_at) VALUES (",
-    (sql-string $position_zobrist), ", ", (sql-int $profile_id), ", ", (sql-string $fen), ", ", (sql-string $side_to_move), ", ", ($depth | into string), ", ", ($nodes | into string), ", ", (sql-int $parsed.value_cp), ", ", (sql-int $parsed.value_mate), ", ", (sql-string $parsed.best_move_uci), ", ", (sql-string $best_move_san), ", ", (sql-string ($parsed | to json)), ", ", (sql-string $created_at), ") ON CONFLICT(position_zobrist, profile_id) DO UPDATE SET position_fen = excluded.position_fen, side_to_move = excluded.side_to_move, depth = excluded.depth, nodes = excluded.nodes, value_cp = excluded.value_cp, value_mate = excluded.value_mate, best_move_uci = excluded.best_move_uci, best_move_san = excluded.best_move_san, analysis_json = excluded.analysis_json, created_at = excluded.created_at;"
+    (sql-string $position_zobrist), ", ", (sql-int $profile_id), ", ", (sql-string $fen), ", ", (sql-string $side_to_move), ", ", ($depth | into string), ", ", ($nodes | into string), ", ", (sql-int $parsed.value_cp), ", ", (sql-int $parsed.value_mate), ", ", (sql-string $parsed.best_move_uci), ", ", (sql-string $best_move_san), ", ", (sql-string $parsed.analysis_json), ", ", (sql-string $created_at), ") ON CONFLICT(position_zobrist, profile_id) DO UPDATE SET position_fen = excluded.position_fen, side_to_move = excluded.side_to_move, depth = excluded.depth, nodes = excluded.nodes, value_cp = excluded.value_cp, value_mate = excluded.value_mate, best_move_uci = excluded.best_move_uci, best_move_san = excluded.best_move_san, analysis_json = excluded.analysis_json, created_at = excluded.created_at;"
   ] | str join)
 
   $db | query db $run_sql | ignore
@@ -194,7 +175,7 @@ def save-dynamic-run [db, position_zobrist: string, profile_id: int, fen: string
       let move_san = (dynamic-position-to-san $fen $move.move_uci)
       let move_sql = ([
         "INSERT INTO position_dynamic_top_moves (run_id, move_rank, move_uci, move_san, prior, q_cp, q_mate, value_cp, pv, analysis_json, created_at) VALUES (",
-        ($run_id | into string), ", ", ($rank | into string), ", ", (sql-string $move.move_uci), ", ", (sql-string $move_san), ", NULL, ", (sql-int $move.q_cp), ", ", (sql-int $move.q_mate), ", ", (sql-int $move.value_cp), ", ", (sql-string $move.pv), ", ", (sql-string ($move | to json)), ", ", (sql-string $created_at), ");"
+        ($run_id | into string), ", ", ($rank | into string), ", ", (sql-string $move.move_uci), ", ", (sql-string $move_san), ", NULL, ", (sql-int $move.q_cp), ", ", (sql-int $move.q_mate), ", ", (sql-int $move.q_cp), ", ", (sql-string $move.pv), ", ", (sql-string ($move | to json)), ", ", (sql-string $created_at), ");"
       ] | str join)
       $db | query db $move_sql | ignore
     }

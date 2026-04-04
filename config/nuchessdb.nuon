@@ -16,8 +16,10 @@
       model: ""
     }
     dynamic: {
+      binary: ""
       engine_name: "lc0"
       elo_tune: 1200
+      depth: 12
     }
     engine: {
       binary: ""

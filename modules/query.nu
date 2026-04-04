@@ -92,11 +92,3 @@ export def queue-stats [] {
   open $db_path | query db "SELECT status, COUNT(*) AS count FROM position_enrichment_queue GROUP BY status ORDER BY status"
 }
 
-export def enqueue-positions-by-occurrence [limit: int = 50] {
-  let cfg = load-config
-  let db_path = $cfg.database.path
-
-  open $db_path | query db ([
-    "INSERT INTO position_enrichment_queue (position_id, priority, source, status, queued_at) SELECT p.id, COALESCE(s.occurrences, 0) AS priority, 'occurrence' AS source, 'pending' AS status, datetime('now') AS queued_at FROM positions p LEFT JOIN position_color_stats s ON s.position_id = p.id ORDER BY COALESCE(s.occurrences, 0) DESC, p.id DESC LIMIT ", ($limit | into string), " ON CONFLICT(position_id) DO UPDATE SET priority = excluded.priority, source = excluded.source, status = 'pending', queued_at = excluded.queued_at;"
-  ] | str join)
-}

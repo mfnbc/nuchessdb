@@ -1,6 +1,4 @@
 use ./config.nu *
-use ./query.nu *
-use ./dynamic.nu *
 
 def ensure-sqlite-file [db_path: string] {
   let exists = ($db_path | path exists)
@@ -28,13 +26,17 @@ def split-sql-statements [sql_text: string] {
 
 export def run-sql [db_path: string, statements: list<string>] {
   let db = (open $db_path)
-  for stmt in $statements {
-    $db | query db $stmt | ignore
+  try {
+    $db | query db "BEGIN IMMEDIATE;" | ignore
+    for stmt in ($statements | where { |stmt| not ($stmt | is-empty) }) {
+      $db | query db $stmt | ignore
+    }
+    $db | query db "COMMIT;" | ignore
+  } catch { |err|
+    let _ = (try { $db | query db "ROLLBACK;" | ignore } catch { null })
+    let msg = if ($err | columns | any { |c| $c == "msg" }) { $err.msg } else { $err | to text }
+    error make { msg: $msg }
   }
-}
-
-export def open-db [db_path: string] {
-  open $db_path
 }
 
 export def init-db [] {
@@ -57,9 +59,6 @@ export def init-db [] {
   if (not ($names | any { |c| $c == "black_elo" })) {
     run-sql $db_path ["ALTER TABLE games ADD COLUMN black_elo INTEGER;"]
   }
-
-  let _ = (refresh-critter-enrichment-queue)
-  let _ = (refresh-dynamic-enrichment-queue)
 
   { database: $db_path, schema: $schema_path, status: "initialized" }
 }

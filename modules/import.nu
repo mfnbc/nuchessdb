@@ -1,55 +1,11 @@
+use ./utils.nu *
 use ./config.nu *
 use ./db.nu *
-use ./query.nu *
+use ./critter.nu *
 use ./dynamic.nu *
 
-def sql-string [value: any] {
-  if $value == null {
-    "NULL"
-  } else {
-    let text = ($value | into string | str replace -a "'" "''")
-    $"'($text)'"
-  }
-}
-
-def sql-int [value: any] {
-  if $value == null {
-    "NULL"
-  } else {
-    $value | into string
-  }
-}
-
-def parse-pgn-headers [pgn: string] {
-  let header_block = ($pgn | split row "\n\n" | first)
-  let pairs = (
-    $header_block
-    | lines
-    | parse --regex '^\[(?<key>[A-Za-z0-9_]+)\s+"(?<value>.*)"\]$'
-  )
-
-  $pairs
-  | reduce -f {} { |row, acc|
-      $acc | upsert ($row.key) ($row.value)
-    }
-}
-
-def split-pgn-games [text: string] {
-  let trimmed = ($text | str trim)
-  if ($trimmed | is-empty) {
-    []
-  } else {
-    $trimmed
-    | split row "\n\n[Event "
-    | enumerate
-    | each { |it|
-        if $it.index == 0 {
-          $it.item
-        } else {
-          $'[Event ($it.item)'
-        }
-      }
-  }
+def headers-list-to-record [headers: list<record>] {
+  $headers | reduce -f {} { |row, acc| $acc | upsert $row.key $row.value }
 }
 
 def game-insert-sql [platform: string, source_game_id: string, raw_pgn: string, headers: record] {
@@ -99,7 +55,7 @@ def account-upsert-sql [platform: string, username: string, is_me: bool] {
 
 def position-upsert-sql [fen: string] {
   let canonical_fen = $fen
-  let canonical_hash = (echo $canonical_fen | shakmaty zobrist)
+  let canonical_hash = ($canonical_fen | shakmaty zobrist)
   let side = ($canonical_fen | split row " " | get 1)
   let castling = ($canonical_fen | split row " " | get 2)
   let ep = ($canonical_fen | split row " " | get 3)
@@ -117,6 +73,120 @@ def position-upsert-sql [fen: string] {
     canonical_fen: $canonical_fen,
     sql: (["INSERT INTO positions (canonical_hash, canonical_fen, raw_fen, side_to_move, castling, en_passant, halfmove_clock, fullmove_number, created_at) VALUES (", $canonical_hash_q, ", ", $canonical_fen_q, ", ", $raw_q, ", ", $side_q, ", ", $castling_q, ", ", $ep_q, ", ", ($halfmove | into string), ", ", ($fullmove | into string), ", datetime('now')) ON CONFLICT(canonical_hash) DO UPDATE SET canonical_fen = excluded.canonical_fen, raw_fen = excluded.raw_fen, side_to_move = excluded.side_to_move, castling = excluded.castling, en_passant = excluded.en_passant, halfmove_clock = excluded.halfmove_clock, fullmove_number = excluded.fullmove_number;"] | str join)
   }
+}
+
+def position-upsert-sql-by-hash [canonical_hash: string, fen: string] {
+  let canonical_fen = $fen
+  let side = ($canonical_fen | split row " " | get 1)
+  let castling = ($canonical_fen | split row " " | get 2)
+  let ep = ($canonical_fen | split row " " | get 3)
+  let halfmove = ($canonical_fen | split row " " | get 4)
+  let fullmove = ($canonical_fen | split row " " | get 5)
+  let canonical_hash_q = (sql-string $canonical_hash)
+  let canonical_fen_q = (sql-string $canonical_fen)
+  let raw_q = (sql-string $fen)
+  let side_q = (sql-string $side)
+  let castling_q = (sql-string $castling)
+  let ep_q = (sql-string $ep)
+
+  {
+    canonical_hash: $canonical_hash,
+    canonical_fen: $canonical_fen,
+    sql: ([
+      "INSERT INTO positions (canonical_hash, canonical_fen, raw_fen, side_to_move, castling, en_passant, halfmove_clock, fullmove_number, created_at) VALUES (",
+      $canonical_hash_q, ", ", $canonical_fen_q, ", ", $raw_q, ", ", $side_q, ", ", $castling_q, ", ", $ep_q, ", ", ($halfmove | into string), ", ", ($fullmove | into string), ", datetime('now')) ON CONFLICT(canonical_hash) DO UPDATE SET canonical_fen = excluded.canonical_fen, raw_fen = excluded.raw_fen, side_to_move = excluded.side_to_move, castling = excluded.castling, en_passant = excluded.en_passant, halfmove_clock = excluded.halfmove_clock, fullmove_number = excluded.fullmove_number;"
+    ] | str join)
+  }
+}
+
+def prepare-batch-position-load [rows: list<record>] {
+  let initial_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+  let start_pos = (position-upsert-sql $initial_fen)
+
+  let acc = (
+    $rows
+    | reduce -f {
+        seen: ({ } | upsert $start_pos.canonical_hash { fen: $initial_fen, game_indexes: [], occurrences: 0 })
+        statements: [$start_pos.sql]
+        repeated_rows: 0
+      } { |row, acc|
+        let existing = ($acc.seen | get -o $row.zobrist)
+        if $existing == null {
+          let pos = (position-upsert-sql-by-hash $row.zobrist $row.fen)
+          {
+            seen: ($acc.seen | upsert $row.zobrist { fen: $row.fen, game_indexes: [$row.game_index], occurrences: 1 })
+            statements: ($acc.statements | append $pos.sql)
+            repeated_rows: $acc.repeated_rows
+          }
+        } else {
+          let game_indexes = if ($existing.game_indexes | any { |i| $i == $row.game_index }) { $existing.game_indexes } else { ($existing.game_indexes | append $row.game_index) }
+          {
+            seen: ($acc.seen | upsert $row.zobrist { fen: $existing.fen, game_indexes: $game_indexes, occurrences: ($existing.occurrences + 1) })
+            statements: $acc.statements
+            repeated_rows: ($acc.repeated_rows + 1)
+          }
+        }
+      }
+  )
+
+  let collision_hashes = (
+    $acc.seen
+    | columns
+    | where { |hash| (($acc.seen | get $hash).occurrences > 1) }
+  )
+
+  let collisions = (
+    $collision_hashes
+    | each { |hash|
+        let entry = ($acc.seen | get $hash)
+        { zobrist: $hash, fen: $entry.fen, occurrences: $entry.occurrences, game_indexes: $entry.game_indexes }
+      }
+  )
+
+  {
+    statements: $acc.statements,
+    summary: {
+      unique_positions: ($acc.seen | columns | length),
+      repeated_positions: ($collisions | length),
+      repeated_rows: $acc.repeated_rows,
+      collision_positions: $collisions,
+    },
+  }
+}
+
+def prepare-batch-position-load-with-source [rows: list<record>, source_label: string] {
+  let prep = (prepare-batch-position-load $rows)
+  let collisions = (
+    $prep.summary.collision_positions
+    | each { |entry|
+        {
+          source_game_id: $source_label,
+          batch_index: 0,
+          zobrist: $entry.zobrist,
+          fen: $entry.fen,
+          occurrences: $entry.occurrences,
+          game_indexes: $entry.game_indexes,
+        }
+      }
+  )
+
+  { statements: $prep.statements, summary: ($prep.summary | upsert collision_positions $collisions) }
+}
+
+def collision-insert-sql [source_game_id: string, batch_index: int, entry: record] {
+  let source_q = (sql-string $source_game_id)
+  let zobrist_q = (sql-string $entry.zobrist)
+  let fen_q = (sql-string $entry.fen)
+  let game_indexes_q = (sql-string ($entry.game_indexes | to json))
+
+  [
+    "INSERT INTO position_import_collisions (source_game_id, batch_index, zobrist, fen, occurrences, game_indexes_json, created_at) VALUES (",
+    $source_q, ", ", ($batch_index | into string), ", ", $zobrist_q, ", ", $fen_q, ", ", ($entry.occurrences | into string), ", ", $game_indexes_q, ", datetime('now')) ON CONFLICT(source_game_id, zobrist) DO UPDATE SET batch_index = excluded.batch_index, fen = excluded.fen, occurrences = excluded.occurrences, game_indexes_json = excluded.game_indexes_json, created_at = excluded.created_at;"
+  ] | str join
+}
+
+def collision-statements [entries: list<record>] {
+  $entries | each { |e| collision-insert-sql $e.source_game_id $e.batch_index $e }
 }
 
 def color-stats-sql [canonical_hash: string, result: string] {
@@ -168,16 +238,10 @@ def move-sql [platform: string, source_game_id: string, ply: int, move_san: stri
   ["INSERT INTO game_positions (game_id, ply, move_san, move_uci, position_before_id, position_after_id, mover_account_id) VALUES ((SELECT id FROM games WHERE platform = ", $platform_q, " AND source_game_id = ", $source_q, "), ", ($ply | into string), ", ", $move_san_q, ", ", $move_uci_q, ", (SELECT id FROM positions WHERE canonical_hash = ", $before_q, "), (SELECT id FROM positions WHERE canonical_hash = ", $after_q, "), ", $mover_id, ");"] | str join
 }
 
-def import-one-game [platform: string, source_game_id: string, raw_pgn: string, cfg: record, db] {
-  let headers = (parse-pgn-headers $raw_pgn)
+def build-game-import-statements [platform: string, source_game_id: string, raw_pgn: string, headers: record, cfg: record, rows: list<record>] {
   let result = ($headers | get -o Result | default "*")
   let white = ($headers | get -o White | default "")
   let black = ($headers | get -o Black | default "")
-
-  let states = (echo $raw_pgn | shakmaty pgn-to-fens)
-  let rows = if ($states | is-empty) { [] } else { $states }
-
-  let initial_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
   let me_username = (if $platform == "chesscom" { $cfg.identity.me.chesscom } else if $platform == "lichess" { $cfg.identity.me.lichess } else { "" })
 
   let sql_parts = [
@@ -186,64 +250,66 @@ def import-one-game [platform: string, source_game_id: string, raw_pgn: string, 
     (game-insert-sql $platform $source_game_id $raw_pgn $headers),
   ]
 
-  let start_pos = (position-upsert-sql $initial_fen)
-  let sql_parts = ($sql_parts | append $start_pos.sql)
-  let sql_parts = ($sql_parts | append (color-stats-sql $start_pos.canonical_hash $result))
-  let sql_parts = ($sql_parts | append (player-stats-sql $start_pos.canonical_hash $me_username $white $black $result $platform))
+  let initial_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+  let initial_hash = ($initial_fen | shakmaty zobrist)
+  let sql_parts = ($sql_parts | append (color-stats-sql $initial_hash $result))
+  let sql_parts = ($sql_parts | append (player-stats-sql $initial_hash $me_username $white $black $result $platform))
 
   let replay = ($rows | reduce -f {
     sql_parts: $sql_parts
-    seen_positions: [$start_pos.canonical_hash]
+    seen_positions: [$initial_hash]
     previous_fen: $initial_fen
-    previous_hash: $start_pos.canonical_hash
+    previous_hash: $initial_hash
   } { |row, acc|
-    let before_pos = (position-upsert-sql $acc.previous_fen)
-    let after_pos = (position-upsert-sql $row.fen)
+    let before_hash = $acc.previous_hash
+    let after_hash = $row.zobrist
     let mover = if $row.color == "white" { $white } else { $black }
-    let before_seen = ($acc.seen_positions | any { |h| $h == $before_pos.canonical_hash })
-    let after_seen = ($acc.seen_positions | any { |h| $h == $after_pos.canonical_hash })
-    let before_color_sql = if $before_seen { "" } else { (color-stats-sql $before_pos.canonical_hash $result) }
-    let before_player_sql = if $before_seen { "" } else { (player-stats-sql $before_pos.canonical_hash $me_username $white $black $result $platform) }
-    let after_color_sql = if $after_seen { "" } else { (color-stats-sql $after_pos.canonical_hash $result) }
-    let after_player_sql = if $after_seen { "" } else { (player-stats-sql $after_pos.canonical_hash $me_username $white $black $result $platform) }
+    let before_seen = ($acc.seen_positions | any { |h| $h == $before_hash })
+    let after_seen = ($acc.seen_positions | any { |h| $h == $after_hash })
+    let before_color_sql = if $before_seen { "" } else { (color-stats-sql $before_hash $result) }
+    let before_player_sql = if $before_seen { "" } else { (player-stats-sql $before_hash $me_username $white $black $result $platform) }
+    let after_color_sql = if $after_seen { "" } else { (color-stats-sql $after_hash $result) }
+    let after_player_sql = if $after_seen { "" } else { (player-stats-sql $after_hash $me_username $white $black $result $platform) }
 
     {
       sql_parts: (
         $acc.sql_parts
-        | append $before_pos.sql
         | append $before_color_sql
         | append $before_player_sql
-        | append $after_pos.sql
         | append $after_color_sql
         | append $after_player_sql
-        | append (move-sql $platform $source_game_id ($row.ply | into int) $row.san $row.uci $before_pos.canonical_hash $after_pos.canonical_hash $mover)
+        | append (move-sql $platform $source_game_id ($row.ply | into int) $row.san $row.uci $before_hash $after_hash $mover)
       )
-      seen_positions: ($acc.seen_positions | append $before_pos.canonical_hash | append $after_pos.canonical_hash)
+      seen_positions: ($acc.seen_positions | append $before_hash | append $after_hash)
       previous_fen: $row.fen
-      previous_hash: $after_pos.canonical_hash
+      previous_hash: $after_hash
     }
   })
 
   let statements = ($replay.sql_parts | where { |stmt| not ($stmt | is-empty) })
 
-  if (not ($statements | is-empty)) {
-    for stmt in $statements {
-      $db | query db $stmt | ignore
-    }
-  }
-
   {
-    source_game_id: $source_game_id
-    result: $result
-    white: $white
-    black: $black
-    moves: ($rows | length)
+    source_game_id: $source_game_id,
+    result: $result,
+    white: $white,
+    black: $black,
+    moves: ($rows | length),
+    statements: $statements,
+  }
+}
+
+def normalize-batch-game [game: record] {
+  {
+    game_index: $game.game_index,
+    source_game_id: $game.source_game_id,
+    headers: (headers-list-to-record $game.headers),
+    result: $game.result,
+    moves: $game.moves,
   }
 }
 
 def import-json-games [path: string, platform: string] {
   let cfg = load-config
-  let db = (open-db $cfg.database.path)
   let payload = (open $path)
   let games = if ($payload | describe) == "list<record>" {
     $payload
@@ -253,32 +319,86 @@ def import-json-games [path: string, platform: string] {
     error make { msg: $'Unsupported JSON export shape in ($path)' }
   }
 
-  $games | reduce -f { index: 0, results: [] } { |row, acc|
-      let idx = ($acc.index | into string)
-      let source_game_id = (if ($row | columns | any { |c| $c == "id" }) { $row.id | into string } else if ($row | columns | any { |c| $c == "url" }) { $row.url | into string } else { $'($path)#($idx)' })
-      let raw_pgn = (if ($row | columns | any { |c| $c == "pgn" }) { $row.pgn | into string } else { error make { msg: $'JSON row missing pgn field in ($path)' } })
-      let imported = (import-one-game $platform $source_game_id $raw_pgn $cfg $db)
+  let plan = (
+    $games
+    | reduce -f { index: 0, statements: [], results: [] } { |row, acc|
+        let idx = ($acc.index | into string)
+        let source_game_id = (if ($row | columns | any { |c| $c == "id" }) { $row.id | into string } else if ($row | columns | any { |c| $c == "url" }) { $row.url | into string } else { $'($path)#($idx)' })
+        let raw_pgn = (if ($row | columns | any { |c| $c == "pgn" }) { $row.pgn | into string } else { error make { msg: $'JSON row missing pgn field in ($path)' } })
+        let batch = ($raw_pgn | shakmaty pgn-to-batch)
+        let normalized_games = ($batch.games | each { |game| normalize-batch-game $game })
+        let prep = (prepare-batch-position-load-with-source $batch.positions $source_game_id)
+        let game_builds = (
+          $normalized_games
+          | each { |game|
+              let game_id = $'($source_game_id)#($game.game_index)'
+              build-game-import-statements $platform $game_id $raw_pgn $game.headers $cfg $game.moves
+            }
+        )
+        let game_results = (
+          $game_builds
+          | each { |plan|
+              {
+                source_game_id: $plan.source_game_id,
+                result: $plan.result,
+                white: $plan.white,
+                black: $plan.black,
+                moves: $plan.moves,
+                dedup_summary: $prep.summary,
+              }
+            }
+        )
+        let game_statements = ($game_builds | each { |plan| $plan.statements } | flatten)
 
-      { index: ($acc.index + 1), results: ($acc.results | append $imported) }
-    }
-  | get results
+        {
+          index: ($acc.index + 1),
+          statements: ($acc.statements | append $prep.statements | append (collision-statements $prep.summary.collision_positions) | append $game_statements),
+          results: ($acc.results | append $game_results | flatten),
+        }
+      }
+  )
+
+  if not ($plan.statements | is-empty) {
+    run-sql ($cfg.database.path) $plan.statements
+  }
+
+  $plan.results
 }
 
 def import-pgn-file [path: string, platform: string] {
   let cfg = load-config
-  let db = (open-db $cfg.database.path)
   let text = (open $path)
-  let games = (split-pgn-games $text)
+  let batch = ($text | shakmaty pgn-to-batch)
+  let normalized_games = ($batch.games | each { |game| normalize-batch-game $game })
+  let prep = (prepare-batch-position-load-with-source $batch.positions $path)
+  let game_builds = (
+    $normalized_games
+    | each { |game|
+        let game_id = $'($path)#($game.game_index)'
+        build-game-import-statements $platform $game_id $text $game.headers $cfg $game.moves
+      }
+  )
+  let game_plans = (
+    $game_builds
+    | each { |plan|
+        {
+          source_game_id: $plan.source_game_id,
+          result: $plan.result,
+          white: $plan.white,
+          black: $plan.black,
+          moves: $plan.moves,
+          dedup_summary: $prep.summary,
+        }
+      }
+  )
+  let game_statements = ($game_builds | each { |plan| $plan.statements } | flatten)
+  let statements = ($prep.statements | append (collision-statements $prep.summary.collision_positions) | append $game_statements)
 
-  $games | reduce -f { index: 0, results: [] } { |item, acc|
-      let idx = ($acc.index | into string)
-      let raw_pgn = ($item | str trim)
-      let source_game_id = $'($path)#($idx)'
-      let imported = (import-one-game $platform $source_game_id $raw_pgn $cfg $db)
+  if not ($statements | is-empty) {
+    run-sql ($cfg.database.path) $statements
+  }
 
-      { index: ($acc.index + 1), results: ($acc.results | append $imported) }
-    }
-  | get results
+  $game_plans
 }
 
 export def import-games [args: list<string>] {

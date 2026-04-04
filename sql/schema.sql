@@ -214,6 +214,19 @@ CREATE TABLE IF NOT EXISTS position_critter_evals (
   FOREIGN KEY (position_id) REFERENCES positions(id)
 );
 
+CREATE TABLE IF NOT EXISTS position_import_collisions (
+  id INTEGER PRIMARY KEY,
+  source_game_id TEXT NOT NULL,
+  batch_index INTEGER,
+  zobrist TEXT NOT NULL,
+  fen TEXT NOT NULL,
+  occurrences INTEGER NOT NULL,
+  game_indexes_json TEXT,
+  created_at TEXT,
+  UNIQUE(source_game_id, zobrist),
+  FOREIGN KEY (zobrist) REFERENCES positions(canonical_hash)
+);
+
 CREATE TABLE IF NOT EXISTS position_enrichment_queue (
   position_id INTEGER PRIMARY KEY,
   priority INTEGER NOT NULL DEFAULT 0,

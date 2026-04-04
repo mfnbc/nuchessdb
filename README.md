@@ -11,7 +11,7 @@
 - Use `critter-eval` as the official decomposed evaluation backend.
 - Use engine name plus ELO tuning for dynamic move-play analysis.
 - Use NuON for config, prompts, and small derived artifacts.
-- Use `nuagent` for JSON enrichment and LLM-facing metadata.
+- Use LLM tooling for commentary and enrichment (planned).
 
 ## What it stores
 
@@ -39,6 +39,7 @@
 - chess.com exports may arrive as JSON with embedded PGN strings.
 - lichess exports may arrive as plain PGN.
 - The importer accepts either shape and stores the raw game text first.
+- `nu_plugin_shakmaty` now exposes `shakmaty pgn-to-batch` for one structured batch record per PGN file.
 - `sync chesscom all <username>` downloads and imports every archive month.
 - `sync chesscom all <username>` uses a small NuON checkpoint in `./tmp/` to skip completed archives.
 - New positions are queued for critter enrichment in popularity order so the most common positions are evaluated first.
@@ -52,13 +53,14 @@
 - Position stats should support both color-based and player-based outcomes.
 - `me` is configured per platform, not assumed globally.
 - Critter evals are stored separately from engine evals.
-- dynamic runs are stored separately from static critter evals.
+- Dynamic runs are stored separately from static critter evals.
 
 ## Suggested workflow
 
 - `http get` remote PGN exports.
 - Parse and normalize with Nushell pipelines.
 - Store in SQLite using tables for games, positions, replay rows, and annotations.
+- Use the structured batch record from `shakmaty pgn-to-batch` as the import boundary.
 - Store critter decomposition results in a dedicated queue and eval table.
 - Store engine-specific dynamic profiles and ranked move outputs in separate tables keyed by zobrist.
 - Use NuON for import settings and prompt configuration.
@@ -75,7 +77,7 @@ Install these separately:
 
 ## User Pipeline
 
-1. Install Nushell, SQLite support, `nu_plugin_shakmaty`, `critter-eval`, and your configured engine binary.
+1. Install Nushell, `nu_plugin_shakmaty`, `critter-eval`, and your configured engine binary.
 2. Edit `config/nuchessdb.nuon` with your database path, your chess.com username, `enrichment.critter.binary` if needed, and `enrichment.dynamic.engine_name` plus `enrichment.dynamic.elo_tune` if you want dynamic move analysis.
 3. Initialize the database:
 
@@ -174,7 +176,7 @@ Build `critter-eval` next to this repo, or set `enrichment.critter.binary` in `c
 
 - `nu_plugin_shakmaty`: deterministic FEN, move, and hash operations.
 - `critter-eval`: decomposed evaluation backend for position enrichment.
-- `nuagent`: JSON enrichment and commentary generation.
+- `nuagent`: JSON enrichment and commentary generation (planned).
 
 ## Dynamic Analysis
 

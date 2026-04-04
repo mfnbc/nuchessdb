@@ -1,32 +1,5 @@
+use ./utils.nu *
 use ./config.nu *
-use ./db.nu *
-
-def sql-string [value: any] {
-  if $value == null {
-    "NULL"
-  } else {
-    let text = ($value | into string | str replace -a "'" "''")
-    $"'($text)'"
-  }
-}
-
-def sql-int [value: any] {
-  if $value == null {
-    "NULL"
-  } else {
-    $value | into string
-  }
-}
-
-def bool-int [value: any] {
-  if $value == null {
-    "NULL"
-  } else if $value {
-    1
-  } else {
-    0
-  }
-}
 
 def critter-config [] {
   let cfg = load-config
@@ -117,7 +90,7 @@ export def critter-queue-stats [] {
 
 export def critter-eval-queue [limit: int = 20] {
   let cfg = load-config
-  let db = (open-db $cfg.database.path)
+  let db = (open $cfg.database.path)
   let binary = (critter-binary)
 
   let _ = (refresh-critter-enrichment-queue)
@@ -135,7 +108,7 @@ export def critter-eval-queue [limit: int = 20] {
           $db | query db (["UPDATE position_critter_eval_queue SET status = 'running', started_at = ", (sql-string $started_at), ", last_error = NULL WHERE position_id = ", ($position_id | into string), ";"] | str join) | ignore
 
           try {
-            let raw = (echo $fen | ^($binary))
+            let raw = ($fen | ^($binary))
             let record = (parse-critter-output $raw)
             save-critter-eval $db $position_id $record
             let finished_at = (date now | format date "%Y-%m-%d %H:%M:%S")

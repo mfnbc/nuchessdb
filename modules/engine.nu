@@ -1,14 +1,5 @@
+use ./utils.nu *
 use ./config.nu *
-use ./db.nu *
-
-def sql-string [value: any] {
-  if $value == null {
-    "NULL"
-  } else {
-    let text = ($value | into string | str replace -a "'" "''")
-    $"'($text)'"
-  }
-}
 
 def engine-config [] {
   let cfg = load-config
@@ -43,15 +34,11 @@ def engine-movetime [] {
   ($ecfg.movetime_ms | default 0)
 }
 
-def engine-fen-info [fen: string] {
-  echo $fen | shakmaty fen-info
-}
-
-def engine-best-move-san [fen: string, uci: string] {
-  if ($uci | is-empty) {
+def engine-best-move-san [fen: string, uci: any] {
+  if ($uci == null or ($uci | is-empty)) {
     null
   } else {
-    echo $fen | shakmaty uci-to-san $uci
+    $fen | shakmaty uci-to-san $uci
   }
 }
 
@@ -88,11 +75,11 @@ def parse-engine-output [text: string] {
   }
 }
 
-def save-engine-eval [db, position_id: int, engine_name: string, engine_model: string, depth: int, nodes: int, centipawn: int, mate: int, best_move_uci: string, best_move_san: string, analysis_json: string] {
+def save-engine-eval [db, position_id: int, engine_name: string, engine_model: string, depth: int, nodes: int, centipawn: any, mate: any, best_move_uci: any, best_move_san: any, analysis_json: string] {
   let created_at = (date now | format date "%Y-%m-%d %H:%M:%S")
   let sql = ([
     "INSERT INTO position_engine_evals (position_id, engine_name, engine_model, depth, nodes, centipawn, mate, best_move_uci, best_move_san, analysis_json, created_at) VALUES (",
-    ($position_id | into string), ", ", (sql-string $engine_name), ", ", (sql-string $engine_model), ", ", ($depth | into string), ", ", ($nodes | into string), ", ", (if $centipawn == null { "NULL" } else { ($centipawn | into string) }), ", ", (if $mate == null { "NULL" } else { ($mate | into string) }), ", ", (sql-string $best_move_uci), ", ", (sql-string $best_move_san), ", ", (sql-string $analysis_json), ", ", (sql-string $created_at), ") ON CONFLICT(position_id, engine_name, engine_model) DO UPDATE SET depth = excluded.depth, nodes = excluded.nodes, centipawn = excluded.centipawn, mate = excluded.mate, best_move_uci = excluded.best_move_uci, best_move_san = excluded.best_move_san, analysis_json = excluded.analysis_json, created_at = excluded.created_at;"
+    ($position_id | into string), ", ", (sql-string $engine_name), ", ", (sql-string $engine_model), ", ", ($depth | into string), ", ", ($nodes | into string), ", ", (sql-int $centipawn), ", ", (sql-int $mate), ", ", (sql-string $best_move_uci), ", ", (sql-string $best_move_san), ", ", (sql-string $analysis_json), ", ", (sql-string $created_at), ") ON CONFLICT(position_id, engine_name, engine_model) DO UPDATE SET depth = excluded.depth, nodes = excluded.nodes, centipawn = excluded.centipawn, mate = excluded.mate, best_move_uci = excluded.best_move_uci, best_move_san = excluded.best_move_san, analysis_json = excluded.analysis_json, created_at = excluded.created_at;"
   ] | str join)
 
   $db | query db $sql | ignore
@@ -100,10 +87,9 @@ def save-engine-eval [db, position_id: int, engine_name: string, engine_model: s
 
 export def eval-queue [limit: int = 20] {
   let cfg = load-config
-  let db = (open-db $cfg.database.path)
-  let ecfg = engine-config
+  let db = (open $cfg.database.path)
   let binary = (engine-binary)
-  let jobs = (open $cfg.database.path | query db ([
+  let jobs = ($db | query db ([
     "SELECT q.position_id, p.canonical_fen, q.priority FROM position_enrichment_queue q JOIN positions p ON p.id = q.position_id WHERE q.status = 'pending' ORDER BY q.priority DESC, q.queued_at ASC LIMIT ", ($limit | into string)
   ] | str join))
 
@@ -119,19 +105,30 @@ export def eval-queue [limit: int = 20] {
           let movetime = (engine-movetime)
           let engine_name = (engine-name)
           let engine_model = (engine-model)
-          let fen_info = (engine-fen-info $fen)
-          let eval_lines = if $movetime > 0 {
-            ["uci", "isready", ($'position fen ($fen)'), ($'go movetime ($movetime)'), "quit"]
-          } else {
-            ["uci", "isready", ($'position fen ($fen)'), ($'go depth ($depth)'), "quit"]
+          let started_at = (date now | format date "%Y-%m-%d %H:%M:%S")
+          $db | query db (["UPDATE position_enrichment_queue SET status = 'running', started_at = ", (sql-string $started_at), ", last_error = NULL WHERE position_id = ", ($position_id | into string), ";"] | str join) | ignore
+
+          try {
+            let eval_lines = if $movetime > 0 {
+              ["uci", "isready", ($'position fen ($fen)'), ($'go movetime ($movetime)'), "quit"]
+            } else {
+              ["uci", "isready", ($'position fen ($fen)'), ($'go depth ($depth)'), "quit"]
+            }
+
+            let raw = ($eval_lines | str join "\n" | ^($binary))
+            let parsed = (parse-engine-output $raw)
+            let best_move_san = (engine-best-move-san $fen $parsed.best_move_uci)
+            save-engine-eval $db $position_id $engine_name $engine_model $depth 0 $parsed.centipawn $parsed.mate $parsed.best_move_uci $best_move_san $parsed.analysis_json
+
+            let finished_at = (date now | format date "%Y-%m-%d %H:%M:%S")
+            $db | query db (["UPDATE position_enrichment_queue SET status = 'done', finished_at = ", (sql-string $finished_at), " WHERE position_id = ", ($position_id | into string), ";"] | str join) | ignore
+            { position_id: $position_id, engine_name: $engine_name, engine_model: $engine_model, centipawn: $parsed.centipawn, mate: $parsed.mate, best_move_uci: $parsed.best_move_uci, best_move_san: $best_move_san }
+          } catch { |err|
+            let finished_at = (date now | format date "%Y-%m-%d %H:%M:%S")
+            let err_text = if ($err | columns | any { |c| $c == "msg" }) { $err.msg } else { $err | to text }
+            $db | query db (["UPDATE position_enrichment_queue SET status = 'failed', finished_at = ", (sql-string $finished_at), ", last_error = ", (sql-string $err_text), " WHERE position_id = ", ($position_id | into string), ";"] | str join) | ignore
+            { position_id: $position_id, engine_name: $engine_name, engine_model: $engine_model, error: $err_text }
           }
-
-          let raw = ($eval_lines | str join "\n" | ^($binary))
-          let parsed = (parse-engine-output $raw)
-          let best_move_san = (engine-best-move-san $fen $parsed.best_move_uci)
-
-          save-engine-eval $db $position_id $engine_name $engine_model $depth 0 $parsed.centipawn $parsed.mate $parsed.best_move_uci $best_move_san $parsed.analysis_json
-          { position_id: $position_id, engine_name: $engine_name, engine_model: $engine_model, centipawn: $parsed.centipawn, mate: $parsed.mate, best_move_uci: $parsed.best_move_uci, best_move_san: $best_move_san, fen_info: $fen_info }
         }
     )
 

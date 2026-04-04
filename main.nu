@@ -1,4 +1,4 @@
-#!/home/michael/.cargo/bin/nu
+#!/usr/bin/env nu
 
 plugin use shakmaty
 

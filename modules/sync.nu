@@ -3,9 +3,7 @@ use ./db.nu *
 use ./import.nu *
 
 def sync-state-path [username: string] {
-  let state_dir = './tmp'
-  mkdir $state_dir
-  $'($state_dir)/sync-progress-($username).nuon'
+  $'./tmp/sync-progress-($username).nuon'
 }
 
 def default-sync-state [username: string] {
@@ -29,6 +27,7 @@ def load-sync-state [username: string] {
 
 def save-sync-state [username: string, state: record] {
   let path = (sync-state-path $username)
+  mkdir ($path | path dirname)
   $state | save --force $path
   $state
 }
