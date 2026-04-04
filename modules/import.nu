@@ -1,5 +1,7 @@
 use ./config.nu *
 use ./db.nu *
+use ./query.nu *
+use ./dynamic.nu *
 
 def sql-string [value: any] {
   if $value == null {
@@ -296,5 +298,8 @@ export def import-games [args: list<string>] {
     import-pgn-file $path $platform
   }
 
-  { path: $path, platform: $platform, games_seen: ($results | length), database: $db_path }
+  let _ = (refresh-critter-enrichment-queue)
+  let _ = (refresh-dynamic-enrichment-queue)
+
+  { path: $path, platform: $platform, games_seen: ($results | length), database: $db_path, critter_queue_refreshed: true, dynamic_queue_refreshed: true }
 }

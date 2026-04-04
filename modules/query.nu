@@ -7,12 +7,16 @@ export def show-overview [] {
   let games = (open $db_path | query db "SELECT COUNT(*) AS count FROM games")
   let positions = (open $db_path | query db "SELECT COUNT(*) AS count FROM positions")
   let annotations = (open $db_path | query db "SELECT COUNT(*) AS count FROM annotations")
+  let critter_evals = (open $db_path | query db "SELECT COUNT(*) AS count FROM position_critter_evals")
+  let dynamic_runs = (open $db_path | query db "SELECT COUNT(*) AS count FROM position_dynamic_runs")
 
   {
     database: $db_path
     games: (if ($games | is-empty) { 0 } else { $games.0.count })
     positions: (if ($positions | is-empty) { 0 } else { $positions.0.count })
     annotations: (if ($annotations | is-empty) { 0 } else { $annotations.0.count })
+    critter_evals: (if ($critter_evals | is-empty) { 0 } else { $critter_evals.0.count })
+    dynamic_runs: (if ($dynamic_runs | is-empty) { 0 } else { $dynamic_runs.0.count })
   }
 }
 

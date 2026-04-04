@@ -1,4 +1,6 @@
 use ./config.nu *
+use ./query.nu *
+use ./dynamic.nu *
 
 def ensure-sqlite-file [db_path: string] {
   let exists = ($db_path | path exists)
@@ -55,6 +57,9 @@ export def init-db [] {
   if (not ($names | any { |c| $c == "black_elo" })) {
     run-sql $db_path ["ALTER TABLE games ADD COLUMN black_elo INTEGER;"]
   }
+
+  let _ = (refresh-critter-enrichment-queue)
+  let _ = (refresh-dynamic-enrichment-queue)
 
   { database: $db_path, schema: $schema_path, status: "initialized" }
 }

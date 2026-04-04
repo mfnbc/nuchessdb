@@ -4,6 +4,8 @@ use ./import.nu *
 use ./sync.nu *
 use ./query.nu *
 use ./engine.nu *
+use ./critter.nu *
+use ./dynamic.nu *
 
 def benchmark-sync [args: list<string>] {
   let started = (date now)
@@ -62,9 +64,35 @@ export def run [args: list<string>] {
       let limit = if ($rest | is-empty) { 20 } else { $rest | get 0 | into int }
       engine-summary $limit | to nuon | print
     }
+    "critter-enqueue" => {
+      let limit = if ($rest | is-empty) { 100000 } else { $rest | get 0 | into int }
+      refresh-critter-enrichment-queue $limit | to nuon | print
+    }
+    "critter-eval" => {
+      let limit = if ($rest | is-empty) { 20 } else { $rest | get 0 | into int }
+      critter-eval-queue $limit | to nuon | print
+    }
+    "critter-queue" => {
+      let limit = if ($rest | is-empty) { 20 } else { $rest | get 0 | into int }
+      queued-critter-evals $limit | to nuon | print
+    }
+    "critter-qstats" => { critter-queue-stats | to nuon | print }
+    "dynamic-enqueue" => {
+      let limit = if ($rest | is-empty) { 100000 } else { $rest | get 0 | into int }
+      refresh-dynamic-enrichment-queue $limit | to nuon | print
+    }
+    "dynamic-eval" => {
+      let limit = if ($rest | is-empty) { 20 } else { $rest | get 0 | into int }
+      dynamic-eval-queue $limit | to nuon | print
+    }
+    "dynamic-queue" => {
+      let limit = if ($rest | is-empty) { 20 } else { $rest | get 0 | into int }
+      queued-dynamic-runs $limit | to nuon | print
+    }
+    "dynamic-qstats" => { dynamic-queue-stats | to nuon | print }
     "bench" => { benchmark-sync $rest | to nuon | print }
     "qstats" => { queue-stats | to nuon | print }
-    "help" => { print "nuchessdb commands: init, import <path> [platform], sync chesscom [all] <username>, bench <sync-args...>, eval [limit], engine [limit], qstats, status, recent [limit], top [limit], report [limit], opponents [limit], rated [limit], queue [limit], enqueue [limit]" }
+    "help" => { print "nuchessdb commands: init, import <path> [platform], sync chesscom [all] <username>, bench <sync-args...>, eval [limit], engine [limit], critter-enqueue [limit], critter-eval [limit], critter-queue [limit], critter-qstats, dynamic-enqueue [limit], dynamic-eval [limit], dynamic-queue [limit], dynamic-qstats, qstats, status, recent [limit], top [limit], report [limit], opponents [limit], rated [limit], queue [limit], enqueue [limit]" }
     _ => { print $'unknown command: ($command)' }
   }
 }

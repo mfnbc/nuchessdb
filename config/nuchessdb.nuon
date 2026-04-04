@@ -10,6 +10,15 @@
     }
   }
   enrichment: {
+    critter: {
+      binary: ""
+      name: "critter-eval"
+      model: ""
+    }
+    dynamic: {
+      engine_name: "lc0"
+      elo_tune: 1200
+    }
     engine: {
       binary: ""
       name: "stockfish"

@@ -18,6 +18,8 @@ Purpose: build a reproducible chess database pipeline in Nushell with SQLite-bac
 
 - Add deterministic chess metadata for each position.
 - Add engine evaluation storage.
+- Add critter decomposed evaluation storage.
+- Add engine-specific dynamic move-rank storage keyed by zobrist.
 - Add LLM commentary storage for positions and moves.
 - Add replay validation queries.
 - Add deduplication checks for repeated positions across games.
@@ -28,6 +30,8 @@ Purpose: build a reproducible chess database pipeline in Nushell with SQLite-bac
 - Add style analysis queries for strengths and weaknesses.
 - Rank positions by frequency and result impact.
 - Add prompts and prompt-version tracking for commentary.
+- Add popularity-ordered critter enrichment queueing.
+- Add engine-name-plus-ELO profile support for dynamic move analysis.
 - Add exports to NuON for compact reports and snapshots.
 - Add training-oriented summaries for recurring mistakes.
 
