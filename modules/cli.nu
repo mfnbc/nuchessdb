@@ -6,6 +6,7 @@ use ./query.nu *
 use ./engine.nu *
 use ./critter.nu *
 use ./dynamic.nu *
+use ./eco.nu *
 
 def benchmark-sync [args: list<string>] {
   let started = (date now)
@@ -68,6 +69,10 @@ export def run [args: list<string>] {
       let limit = if ($rest | is-empty) { 100000 } else { $rest | get 0 | into int }
       refresh-critter-enrichment-queue $limit | to nuon | print
     }
+    "critter-enqueue-games" => {
+      let limit = if ($rest | is-empty) { 100000 } else { $rest | get 0 | into int }
+      critter-enqueue-games $limit | to nuon | print
+    }
     "critter-eval" => {
       let limit = if ($rest | is-empty) { 20 } else { $rest | get 0 | into int }
       critter-eval-queue $limit | to nuon | print
@@ -90,6 +95,10 @@ export def run [args: list<string>] {
       queued-dynamic-runs $limit | to nuon | print
     }
     "dynamic-qstats" => { dynamic-queue-stats | to nuon | print }
+    "eco-classify" => {
+      let limit = if ($rest | is-empty) { 20 } else { $rest | get 0 | into int }
+      position-report $limit | eco-classify | to nuon | print
+    }
     "bench" => { benchmark-sync $rest | to nuon | print }
     "qstats" => { queue-stats | to nuon | print }
     "help" => { print "nuchessdb — Nushell chess database and enrichment pipeline
@@ -118,16 +127,20 @@ ENGINE EVAL (Stockfish / lc0 static)
   engine [limit]              Show stored engine eval results       (default 20)
 
 CRITTER EVAL (Open Critter decomposed)
-  critter-enqueue [limit]     Queue positions for critter eval      (default all)
-  critter-queue [limit]       Show pending critter eval queue       (default 20)
+  critter-enqueue [limit]     Queue popular positions (occurrences>=3) (default all)
+  critter-enqueue-games [lim] Queue positions from games, newest first  (default all)
+  critter-queue [limit]       Show pending critter eval queue        (default 20)
   critter-qstats              Critter eval queue statistics
-  critter-eval [limit]        Run critter eval on queued positions  (default 20)
+  critter-eval [limit]        Run critter eval on queued positions   (default 20)
 
 DYNAMIC EVAL (engine move ladder)
   dynamic-enqueue [limit]     Queue positions for dynamic eval      (default all)
   dynamic-queue [limit]       Show pending dynamic eval queue       (default 20)
   dynamic-qstats              Dynamic eval queue statistics
-  dynamic-eval [limit]        Run dynamic eval on queued positions  (default 20)" }
+  dynamic-eval [limit]        Run dynamic eval on queued positions  (default 20)
+
+OPENINGS (ECO classification)
+  eco-classify [limit]        Top positions with ECO opening names  (default 20)" }
     _ => { print $'unknown command: ($command)' }
   }
 }

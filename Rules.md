@@ -49,3 +49,11 @@
 - Use engine-specific model profiles for dynamic move analysis.
   - Use LLM tooling for commentary and enrichment (planned).
 - Keep analysis reproducible where possible.
+
+## Language and tooling constraints
+
+- Nushell, Rust, and Rust-based Nushell plugins only.
+- Do not use Python, jq, sed, awk, or grep for data processing.
+- Use Nushell's `http get` for fetching remote data.
+- Use Nushell's built-in `from json`, `to json`, `where`, `select`, etc. for data transformation.
+- Agent tasks (code generation, shell commands) must follow the same constraint.

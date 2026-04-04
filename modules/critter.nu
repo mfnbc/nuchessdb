@@ -68,7 +68,7 @@ export def refresh-critter-enrichment-queue [limit: int = 100000] {
   let db_path = $cfg.database.path
 
   open $db_path | query db ([
-    "INSERT INTO position_critter_eval_queue (position_id, priority, source, status, queued_at) SELECT p.id, COALESCE(s.occurrences, 0) AS priority, 'popular' AS source, 'pending' AS status, datetime('now') AS queued_at FROM positions p LEFT JOIN position_color_stats s ON s.position_id = p.id LEFT JOIN position_critter_evals e ON e.position_id = p.id AND e.critter_name = ", (sql-string (critter-name)), " AND e.critter_model = ", (sql-string (critter-model)), " WHERE e.position_id IS NULL ORDER BY COALESCE(s.occurrences, 0) DESC, p.id DESC LIMIT ", ($limit | into string), " ON CONFLICT(position_id) DO UPDATE SET priority = excluded.priority, source = excluded.source, status = 'pending', queued_at = excluded.queued_at;"
+    "INSERT INTO position_critter_eval_queue (position_id, priority, source, status, queued_at) SELECT p.id, COALESCE(s.occurrences, 0) AS priority, 'popular' AS source, 'pending' AS status, datetime('now') AS queued_at FROM positions p LEFT JOIN position_color_stats s ON s.position_id = p.id LEFT JOIN position_critter_evals e ON e.position_id = p.id AND e.critter_name = ", (sql-string (critter-name)), " AND e.critter_model = ", (sql-string (critter-model)), " WHERE e.position_id IS NULL AND COALESCE(s.occurrences, 0) >= 3 ORDER BY COALESCE(s.occurrences, 0) DESC, p.id DESC LIMIT ", ($limit | into string), " ON CONFLICT(position_id) DO UPDATE SET priority = excluded.priority, source = excluded.source, status = 'pending', queued_at = excluded.queued_at;"
   ] | str join)
 }
 
@@ -99,30 +99,54 @@ export def critter-eval-queue [limit: int = 20] {
   if ($jobs | is-empty) {
     { evaluated: 0, message: "queue empty" }
   } else {
+    # Mark all jobs as running in one pass
+    let started_at = (date now | format date "%Y-%m-%d %H:%M:%S")
+    $jobs | each { |job|
+      $db | query db (["UPDATE position_critter_eval_queue SET status = 'running', started_at = ", (sql-string $started_at), ", last_error = NULL WHERE position_id = ", ($job.position_id | into string), ";"] | str join) | ignore
+    }
+
+    # Pipe all FENs to a single critter-eval invocation (eliminates N-1 process spawns)
+    let fens_input = ($jobs | get canonical_fen | str join "\n")
+    let raw_output = (try { $fens_input | ^($binary) } catch { "" })
+    let output_lines = ($raw_output | lines | where { |line| not ($line | str trim | is-empty) })
+
     let evaluated = (
       $jobs
-      | each { |job|
+      | enumerate
+      | each { |item|
+          let job = $item.item
+          let idx = $item.index
           let position_id = $job.position_id
-          let fen = $job.canonical_fen
-          let started_at = (date now | format date "%Y-%m-%d %H:%M:%S")
-          $db | query db (["UPDATE position_critter_eval_queue SET status = 'running', started_at = ", (sql-string $started_at), ", last_error = NULL WHERE position_id = ", ($position_id | into string), ";"] | str join) | ignore
+          let finished_at = (date now | format date "%Y-%m-%d %H:%M:%S")
 
-          try {
-            let raw = ($fen | ^($binary))
-            let record = (parse-critter-output $raw)
-            save-critter-eval $db $position_id $record
-            let finished_at = (date now | format date "%Y-%m-%d %H:%M:%S")
-            $db | query db (["UPDATE position_critter_eval_queue SET status = 'done', finished_at = ", (sql-string $finished_at), " WHERE position_id = ", ($position_id | into string), ";"] | str join) | ignore
-            { position_id: $position_id, status: "done", final_score: $record.final_score, normalized_fen: $record.normalized_fen }
-          } catch { |err|
-            let finished_at = (date now | format date "%Y-%m-%d %H:%M:%S")
-            let err_text = if ($err | columns | any { |c| $c == "msg" }) { $err.msg } else { $err | to text }
+          if $idx >= ($output_lines | length) {
+            let err_text = "no output from critter-eval for this position"
             $db | query db (["UPDATE position_critter_eval_queue SET status = 'failed', finished_at = ", (sql-string $finished_at), ", last_error = ", (sql-string $err_text), " WHERE position_id = ", ($position_id | into string), ";"] | str join) | ignore
             { position_id: $position_id, status: "failed", error: $err_text }
+          } else {
+            try {
+              let record = ($output_lines | get $idx | from json)
+              save-critter-eval $db $position_id $record
+              $db | query db (["UPDATE position_critter_eval_queue SET status = 'done', finished_at = ", (sql-string $finished_at), " WHERE position_id = ", ($position_id | into string), ";"] | str join) | ignore
+              { position_id: $position_id, status: "done", final_score: $record.final_score, normalized_fen: $record.normalized_fen }
+            } catch { |err|
+              let err_text = if ($err | columns | any { |c| $c == "msg" }) { $err.msg } else { $err | to text }
+              $db | query db (["UPDATE position_critter_eval_queue SET status = 'failed', finished_at = ", (sql-string $finished_at), ", last_error = ", (sql-string $err_text), " WHERE position_id = ", ($position_id | into string), ";"] | str join) | ignore
+              { position_id: $position_id, status: "failed", error: $err_text }
+            }
           }
         }
     )
 
     { evaluated: ($evaluated | length), rows: $evaluated }
   }
+}
+
+export def critter-enqueue-games [limit: int = 100000] {
+  let cfg = load-config
+  let db_path = $cfg.database.path
+
+  open $db_path | query db ([
+    "INSERT INTO position_critter_eval_queue (position_id, priority, source, status, queued_at) SELECT p.id, 0 AS priority, 'game-sweep' AS source, 'pending' AS status, datetime('now') AS queued_at FROM positions p INNER JOIN game_positions gp ON gp.position_after_id = p.id INNER JOIN games g ON g.id = gp.game_id LEFT JOIN position_critter_evals e ON e.position_id = p.id AND e.critter_name = ", (sql-string (critter-name)), " AND e.critter_model = ", (sql-string (critter-model)), " WHERE e.position_id IS NULL GROUP BY p.id ORDER BY MAX(g.played_at) DESC LIMIT ", ($limit | into string), " ON CONFLICT(position_id) DO UPDATE SET source = excluded.source, status = 'pending', queued_at = excluded.queued_at;"
+  ] | str join)
 }

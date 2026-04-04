@@ -101,6 +101,9 @@ cargo build --release
 # 5. Check progress
 ./main.nu status
 ./main.nu critter-qstats
+
+# 6. Explore opening patterns — classify your most-visited positions
+./main.nu eco-classify 100
 ```
 
 ---
@@ -124,7 +127,8 @@ cargo build --release
 | `qstats` | Engine eval queue statistics |
 | `eval [limit]` | Run engine eval on queued positions (default 20) |
 | `engine [limit]` | Show stored engine eval results (default 20) |
-| `critter-enqueue [limit]` | Queue positions for critter eval (default all) |
+| `critter-enqueue [limit]` | Queue popular positions for critter eval (occurrences ≥ 3, default all) |
+| `critter-enqueue-games [limit]` | Queue positions from your games for critter eval, newest games first (default 100000) |
 | `critter-queue [limit]` | Show pending critter eval queue (default 20) |
 | `critter-qstats` | Critter eval queue statistics |
 | `critter-eval [limit]` | Run critter eval on queued positions (default 20) |
@@ -132,6 +136,7 @@ cargo build --release
 | `dynamic-queue [limit]` | Show pending dynamic eval queue (default 20) |
 | `dynamic-qstats` | Dynamic eval queue statistics |
 | `dynamic-eval [limit]` | Run dynamic eval on queued positions (default 20) |
+| `eco-classify [limit]` | Top positions from `report` enriched with ECO opening names (default 20) |
 
 ---
 
@@ -314,7 +319,8 @@ Each evaluator follows the same queue-then-drain pattern:
 
 ```nu
 # Critter (decomposed Open Critter eval)
-./main.nu critter-enqueue        # populate queue from all known positions
+./main.nu critter-enqueue        # queue popular positions (occurrences >= 3)
+./main.nu critter-enqueue-games  # or: queue by game recency (newest first)
 ./main.nu critter-eval 50        # drain 50 entries
 ./main.nu critter-qstats         # check progress
 
@@ -330,6 +336,256 @@ Each evaluator follows the same queue-then-drain pattern:
 ```
 
 Re-running `*-enqueue` is safe — it inserts only positions not already in the queue.
+
+---
+
+## Openings
+
+ECO opening classification is stored as a flat JSON file (`data/eco.json`) and joined at query time in Nushell — no schema changes, no extra SQL table. Only ECO root positions are covered (499 entries, A01–E99). Most middlegame and endgame positions will not match — that is expected.
+
+### Data files
+
+| File | Contents |
+|---|---|
+| `data/eco.json` | 499 ECO root entries; fields: `fen`, `eco_code`, `name`, `moves` |
+| `data/eco_commentary.json` | LLM-extracted commentary, keyed by `eco_code` |
+
+Each entry in `eco.json`:
+
+```json
+{
+  "fen":      "rnbqkbnr/pppppppp/8/8/8/1P6/P1PPPPPP/RNBQKBNR b KQkq -",
+  "eco_code": "A01",
+  "name":     "Nimzo-Larsen Attack",
+  "moves":    "1. b3"
+}
+```
+
+FEN keys are 4-field (board + side to move + castling rights + en-passant square). The halfmove clock and fullmove number are stripped before matching, so 6-field `canonical_fen` values from the database work without any pre-processing.
+
+### Quick command
+
+```nu
+# Top positions from position-report, enriched with ECO names (default 20)
+./main.nu eco-classify
+
+# Increase the look-ahead — examine more positions to find ECO matches
+./main.nu eco-classify 200
+```
+
+Internally this runs `position-report $limit | eco-classify`. Rows with no ECO match appear with empty `eco_code` and `opening_name` columns.
+
+### Module functions
+
+Import the module directly in interactive Nushell for full flexibility:
+
+```nu
+use modules/eco.nu *
+```
+
+#### `eco-lookup <fen: string>`
+
+Look up one FEN. Strips to 4 fields automatically. Returns the matching record or `null`.
+
+```nu
+# Works with a 6-field canonical_fen from the database
+eco-lookup "rnbqkbnr/pppppppp/8/8/8/1P6/P1PPPPPP/RNBQKBNR b KQkq - 0 1"
+# => { fen: "rnbqkbnr/pppppppp/8/8/8/1P6/P1PPPPPP/RNBQKBNR b KQkq -", eco_code: "A01", name: "Nimzo-Larsen Attack", moves: "1. b3" }
+
+# Returns null when no match
+eco-lookup "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq -"
+# => null
+```
+
+#### `eco-classify` (pipeline command)
+
+Enriches any table that has a `canonical_fen` column. Adds `eco_code` and `opening_name` columns. Rows with no match get empty strings.
+
+```nu
+use modules/eco.nu *
+
+# Classify the top positions by occurrence
+open ./data/nuchessdb.sqlite
+| query db "
+    SELECT p.canonical_fen, s.occurrences
+    FROM positions p
+    JOIN position_color_stats s ON s.position_id = p.id
+    ORDER BY s.occurrences DESC
+    LIMIT 100
+  "
+| eco-classify
+
+# Any command that returns a canonical_fen column works
+./main.nu report 500 | eco-classify
+```
+
+### Finding insights
+
+The general pattern: run a query → pipe to `eco-classify` → filter, sort, or group in Nushell.
+
+#### Your most-visited openings
+
+The fastest starting point. Shows which ECO positions you actually reach and your record at each:
+
+```nu
+use modules/eco.nu *
+
+./main.nu report 500
+| eco-classify
+| where eco_code != ""
+| select eco_code opening_name me_occurrences me_wins me_losses me_win_rate me_loss_rate
+| sort-by me_occurrences --reverse
+```
+
+#### Win rate aggregated by opening
+
+Multiple positions can map to the same ECO root if different move orders land on the same canonical position. Group to aggregate:
+
+```nu
+use modules/eco.nu *
+
+./main.nu report 1000
+| eco-classify
+| where eco_code != "" and me_occurrences > 0
+| group-by eco_code
+| items { |code rows|
+    let games  = ($rows | get me_occurrences | math sum)
+    let wins   = ($rows | get me_wins   | math sum)
+    let losses = ($rows | get me_losses | math sum)
+    {
+      eco_code:     $code
+      opening_name: ($rows | get opening_name | first)
+      games:        $games
+      wins:         $wins
+      losses:       $losses
+      win_pct:      (if $games > 0 { ($wins   / $games * 100 | math round) } else { 0 })
+      loss_pct:     (if $games > 0 { ($losses / $games * 100 | math round) } else { 0 })
+    }
+  }
+| sort-by games --reverse
+```
+
+#### Your problem openings
+
+Sort by loss rate, filter out low-sample openings:
+
+```nu
+use modules/eco.nu *
+
+./main.nu report 1000
+| eco-classify
+| where eco_code != "" and me_occurrences >= 5
+| select eco_code opening_name me_occurrences me_win_rate me_loss_rate
+| sort-by me_loss_rate --reverse
+| first 20
+```
+
+#### Bare query approach
+
+When you need a SQL join that `position-report` does not cover, fetch the raw data in SQL and then join with `eco.json` in Nushell. The 4-field FEN strip is the only extra step:
+
+```nu
+let db  = (open ./data/nuchessdb.sqlite)
+let eco = (open ./data/eco.json)
+
+$db | query db "
+  SELECT
+    p.canonical_fen,
+    SUM(ps.wins)        AS me_wins,
+    SUM(ps.draws)       AS me_draws,
+    SUM(ps.losses)      AS me_losses,
+    SUM(ps.occurrences) AS me_games
+  FROM position_player_stats ps
+  JOIN accounts  a ON a.id = ps.account_id AND a.is_me = 1
+  JOIN positions p ON p.id = ps.position_id
+  GROUP BY ps.position_id
+  HAVING me_games >= 3
+  ORDER BY me_losses DESC
+"
+| each { |row|
+    let fen4  = ($row.canonical_fen | split row " " | first 4 | str join " ")
+    let match = ($eco | where fen == $fen4)
+    if ($match | is-empty) {
+      $row | insert eco_code "" | insert opening_name ""
+    } else {
+      $row | insert eco_code $match.0.eco_code | insert opening_name $match.0.name
+    }
+  }
+| where eco_code != ""
+| insert win_pct { |r| ($r.me_wins / $r.me_games * 100 | math round) }
+| select eco_code opening_name me_games me_wins me_losses win_pct
+| sort-by win_pct
+```
+
+The pattern: SQL for aggregation, a `each` block to strip the FEN and look it up in the JSON array, then filter and sort in Nushell.
+
+#### Combining with critter scores
+
+After critter-eval has run, you can identify openings where the position is objectively balanced but your results are poor — a knowledge gap rather than a bad opening:
+
+```nu
+let db  = (open ./data/nuchessdb.sqlite)
+let eco = (open ./data/eco.json)
+
+$db | query db "
+  SELECT
+    p.canonical_fen,
+    SUM(ps.losses)      AS me_losses,
+    SUM(ps.occurrences) AS me_games,
+    ce.final_score
+  FROM position_player_stats ps
+  JOIN accounts               a  ON a.id  = ps.account_id AND a.is_me = 1
+  JOIN positions               p  ON p.id  = ps.position_id
+  JOIN position_critter_evals ce ON ce.position_id = p.id
+  GROUP BY ps.position_id
+  HAVING me_games >= 3
+  ORDER BY me_losses DESC
+"
+| each { |row|
+    let fen4  = ($row.canonical_fen | split row " " | first 4 | str join " ")
+    let match = ($eco | where fen == $fen4)
+    if ($match | is-empty) {
+      $row | insert eco_code "" | insert opening_name ""
+    } else {
+      $row | insert eco_code $match.0.eco_code | insert opening_name $match.0.name
+    }
+  }
+| where eco_code != ""
+| select eco_code opening_name final_score me_games me_losses
+| sort-by me_losses --reverse
+```
+
+A `final_score` near 0 (centipawns, balanced) alongside a high `me_losses` count is the signal. Those are your opening study priorities.
+
+### Adding commentary
+
+`data/eco_commentary.json` is a flat object keyed by ECO code. Each value is a record with `name` and `commentary`:
+
+```json
+{
+  "A01": {
+    "name": "Nimzo-Larsen Attack",
+    "commentary": "White fianchettoes the queen's bishop early, aiming for a flexible queenside setup..."
+  },
+  "B20": {
+    "name": "Sicilian Defence",
+    "commentary": "Black's most combative response to 1.e4, leading to asymmetric positions..."
+  }
+}
+```
+
+To use commentary in a Nushell session:
+
+```nu
+use modules/eco.nu *
+
+let commentary = (open ./data/eco_commentary.json)
+let opening    = (eco-lookup $some_fen)
+
+if $opening != null {
+  $commentary | get -o $opening.eco_code
+}
+```
 
 ---
 

@@ -1,0 +1,10 @@
+{
+  "_note": "Keyed by ECO code. Add entries as LLM-extracted commentary is produced.",
+  "_format": "{ eco_code: { name: string, commentary: string } }",
+  "_example": {
+    "B20": {
+      "name": "Sicilian Defense",
+      "commentary": "Tarrasch: '...' Steinitz: '...'"
+    }
+  }
+}
