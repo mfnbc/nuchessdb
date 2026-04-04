@@ -1,184 +1,338 @@
 # nuchessdb
 
-`nuchessdb` is a Nushell-first chess database and enrichment pipeline for importing games from chess.com and lichess, replaying them into canonical positions, and layering deterministic chess facts, critter decomposed evaluations, engine-specific dynamic move analysis, engine evaluations, and LLM commentary on top.
+A Nushell-first chess database and enrichment pipeline. Import games from chess.com or lichess, replay them into canonical positions, and layer deterministic evaluation, decomposed critter scores, and dynamic move analysis on top — all queryable directly from Nushell.
 
-## Core idea
+## How it works
 
-- Use Nushell as the orchestration layer.
-- Use SQLite as the durable game and position store.
-- Use Nushell's built-in SQLite commands, not an external `sqlite3` dependency.
-- Use `nu_plugin_shakmaty` for deterministic chess semantics.
-- Use `critter-eval` as the official decomposed evaluation backend.
-- Use engine name plus ELO tuning for dynamic move-play analysis.
-- Use NuON for config, prompts, and small derived artifacts.
-- Use LLM tooling for commentary and enrichment (planned).
+- Nushell orchestrates everything.
+- SQLite stores games, positions, stats, and evaluation results.
+- `nu_plugin_shakmaty` handles deterministic chess semantics (FEN, moves, hashing).
+- `critter-eval` provides decomposed Open Critter evaluation per position.
+- A UCI engine (e.g. Stockfish, lc0) can add static or dynamic move analysis.
 
-## What it stores
-
-- Raw games, including the original PGN.
-- Canonical positions with a hash that ignores move counters.
-- Replay rows linking games to positions and moves.
-- Outcome stats by color and by platform-scoped player identity.
-- Deterministic annotations like legal moves, checks, mobility, and engine evals.
-- Critter evaluation vectors stored per position.
-- Dynamic move ladders stored per position and engine profile.
-- LLM commentary attached to positions or moves.
-
-## Data flow
-
-1. Download PGNs from chess.com or lichess.
-2. Import the raw games into SQLite.
-3. Replay each game into normalized positions.
-4. Deduplicate positions by canonical key.
-5. Compute deterministic chess metadata.
-6. Add critter decomposed evaluations and dynamic move ladders when available.
-7. Add LLM commentary through `nuagent`.
-
-## Import formats
-
-- chess.com exports may arrive as JSON with embedded PGN strings.
-- lichess exports may arrive as plain PGN.
-- The importer accepts either shape and stores the raw game text first.
-- `nu_plugin_shakmaty` now exposes `shakmaty pgn-to-batch` for one structured batch record per PGN file.
-- `sync chesscom all <username>` downloads and imports every archive month.
-- `sync chesscom all <username>` uses a small NuON checkpoint in `./tmp/` to skip completed archives.
-- New positions are queued for critter enrichment in popularity order so the most common positions are evaluated first.
-
-## Principles
-
-- Canonical position identity ignores move counters.
-- Raw FEN is still stored for exact replay.
-- Every position can have commentary.
-- Deterministic facts and subjective commentary stay separate.
-- Position stats should support both color-based and player-based outcomes.
-- `me` is configured per platform, not assumed globally.
-- Critter evals are stored separately from engine evals.
-- Dynamic runs are stored separately from static critter evals.
-
-## Suggested workflow
-
-- `http get` remote PGN exports.
-- Parse and normalize with Nushell pipelines.
-- Store in SQLite using tables for games, positions, replay rows, and annotations.
-- Use the structured batch record from `shakmaty pgn-to-batch` as the import boundary.
-- Store critter decomposition results in a dedicated queue and eval table.
-- Store engine-specific dynamic profiles and ranked move outputs in separate tables keyed by zobrist.
-- Use NuON for import settings and prompt configuration.
-- Query and report directly from Nushell.
+---
 
 ## Prerequisites
 
-Install these separately:
+### 1. Build and install `nu_plugin_shakmaty`
 
-- Nushell
-- `nu_plugin_shakmaty`
-- `critter-eval`
-- Your configured engine binary for dynamic analysis
+```sh
+cd ../nu_plugin_shakmaty
+cargo build --release
+```
 
-## User Pipeline
+Inside Nushell:
 
-1. Install Nushell, `nu_plugin_shakmaty`, `critter-eval`, and your configured engine binary.
-2. Edit `config/nuchessdb.nuon` with your database path, your chess.com username, `enrichment.critter.binary` if needed, and `enrichment.dynamic.engine_name` plus `enrichment.dynamic.elo_tune` if you want dynamic move analysis.
-3. Initialize the database:
+```nu
+plugin add /full/path/to/nu_plugin_shakmaty/target/release/nu_plugin_shakmaty
+```
 
-```bash
+### 2. Build `critter-eval`
+
+```sh
+cd ../critter-eval
+cargo build --release
+# binary: target/release/critter-eval
+```
+
+### 3. Configure `config/nuchessdb.nuon`
+
+```nuon
+{
+  database: {
+    path: "./data/nuchessdb.sqlite"   # where the SQLite file lives
+    schema: "./sql/schema.sql"        # DDL applied on init
+  }
+  identity: {
+    me: {
+      chesscom: "your-chesscom-username"   # used to classify games as wins/losses/draws
+      lichess:  "your-lichess-username"
+    }
+  }
+  enrichment: {
+    critter: {
+      binary: "../critter-eval/target/release/critter-eval"   # leave "" for auto-discovery
+      name:   "critter-eval"
+      model:  ""
+    }
+    dynamic: {
+      binary:      "/path/to/lc0"   # UCI engine binary
+      engine_name: "lc0"
+      elo_tune:    1200             # --WeightsFile ELO target passed to the engine
+      depth:       12
+    }
+    engine: {
+      binary:      "/path/to/stockfish"   # for static evals
+      name:        "stockfish"
+      model:       ""
+      threads:     1
+      hash_mb:     128
+      depth:       12
+      nodes:       0       # 0 = not used
+      movetime_ms: 0       # 0 = not used
+    }
+    llm_model:      ""
+    prompt_version: ""
+  }
+}
+```
+
+---
+
+## Quick start
+
+```nu
+# 1. Create the database
 ./main.nu init
-```
 
-4. Ingest your chess.com data:
-
-```bash
+# 2. Download and import every chess.com archive for your account
 ./main.nu sync chesscom all <your-username>
-```
 
-5. Queue critter decompositions for the most frequent positions:
-
-```bash
+# 3. Queue and run critter decomposed evals (most frequent positions first)
 ./main.nu critter-enqueue
-```
-
-6. Run critter enrichment:
-
-```bash
 ./main.nu critter-eval 50
-```
 
-7. Check critter queue progress:
+# 4. Optional: queue and run static engine evals
+./main.nu enqueue 100
+./main.nu eval 20
 
-```bash
+# 5. Check progress
+./main.nu status
 ./main.nu critter-qstats
-./main.nu critter-queue 20
 ```
 
-8. Optional: queue and run dynamic engine analysis:
+---
 
-```bash
+## All commands
+
+| Command | Description |
+|---|---|
+| `init` | Create the SQLite schema |
+| `import <path> [platform]` | Import a local PGN or chess.com JSON export |
+| `sync chesscom [all] <user>` | Download and import chess.com archives |
+| `bench <sync-args...>` | Time a sync run |
+| `status` | Overview: game count, position count, queue depths |
+| `recent [limit]` | Most recently imported games (default 10) |
+| `top [limit]` | Most-visited positions (default 20) |
+| `report [limit]` | Positions with outcome stats (default 20) |
+| `opponents [limit]` | Most-played opponents (default 20) |
+| `rated [limit]` | Opponents sorted by rating (default 50) |
+| `enqueue [limit]` | Queue hot positions for engine eval (default 50) |
+| `queue [limit]` | Show pending engine eval queue (default 50) |
+| `qstats` | Engine eval queue statistics |
+| `eval [limit]` | Run engine eval on queued positions (default 20) |
+| `engine [limit]` | Show stored engine eval results (default 20) |
+| `critter-enqueue [limit]` | Queue positions for critter eval (default all) |
+| `critter-queue [limit]` | Show pending critter eval queue (default 20) |
+| `critter-qstats` | Critter eval queue statistics |
+| `critter-eval [limit]` | Run critter eval on queued positions (default 20) |
+| `dynamic-enqueue [limit]` | Queue positions for dynamic eval (default all) |
+| `dynamic-queue [limit]` | Show pending dynamic eval queue (default 20) |
+| `dynamic-qstats` | Dynamic eval queue statistics |
+| `dynamic-eval [limit]` | Run dynamic eval on queued positions (default 20) |
+
+---
+
+## Player profiling queries
+
+Use Nushell directly against the SQLite file. Set `$db` once and reuse:
+
+```nu
+let db = (open ./data/nuchessdb.sqlite)
+```
+
+### Win rate by color
+
+```nu
+$db | query db "
+  SELECT
+    CASE WHEN g.white_account_id = m.id THEN 'white' ELSE 'black' END AS color,
+    COUNT(*) AS games,
+    SUM(CASE
+      WHEN g.white_account_id = m.id AND g.result = '1-0' THEN 1
+      WHEN g.black_account_id = m.id AND g.result = '0-1' THEN 1
+      ELSE 0
+    END) AS wins,
+    ROUND(100.0 * SUM(CASE
+      WHEN g.white_account_id = m.id AND g.result = '1-0' THEN 1
+      WHEN g.black_account_id = m.id AND g.result = '0-1' THEN 1
+      ELSE 0
+    END) / COUNT(*), 1) AS win_pct
+  FROM games g
+  JOIN accounts m ON m.is_me = 1
+    AND (g.white_account_id = m.id OR g.black_account_id = m.id)
+  GROUP BY color
+"
+```
+
+### Positions I lose from most — training targets
+
+```nu
+$db | query db "
+  SELECT
+    p.canonical_fen,
+    ps.losses,
+    ps.wins,
+    ps.occurrences,
+    ROUND(100.0 * ps.losses / ps.occurrences, 1) AS loss_pct
+  FROM position_player_stats ps
+  JOIN accounts m ON m.is_me = 1 AND ps.account_id = m.id
+  JOIN positions p ON p.id = ps.position_id
+  WHERE ps.occurrences >= 3
+  ORDER BY loss_pct DESC, ps.losses DESC
+  LIMIT 20
+"
+```
+
+### My win rate at the openings I reach most
+
+```nu
+$db | query db "
+  SELECT
+    p.canonical_fen,
+    ps.occurrences,
+    ps.wins,
+    ps.draws,
+    ps.losses,
+    ROUND(100.0 * ps.wins / ps.occurrences, 1) AS win_pct
+  FROM position_player_stats ps
+  JOIN accounts m ON m.is_me = 1 AND ps.account_id = m.id
+  JOIN positions p ON p.id = ps.position_id
+  ORDER BY ps.occurrences DESC
+  LIMIT 20
+"
+```
+
+### Opponents I struggle against
+
+```nu
+$db | query db "
+  SELECT
+    opp.username AS opponent,
+    COUNT(*) AS games,
+    SUM(CASE
+      WHEN g.white_account_id = m.id AND g.result = '1-0' THEN 1
+      WHEN g.black_account_id = m.id AND g.result = '0-1' THEN 1
+      ELSE 0
+    END) AS wins,
+    SUM(CASE
+      WHEN g.white_account_id = m.id AND g.result = '0-1' THEN 1
+      WHEN g.black_account_id = m.id AND g.result = '1-0' THEN 1
+      ELSE 0
+    END) AS losses,
+    ROUND(100.0 * SUM(CASE
+      WHEN g.white_account_id = m.id AND g.result = '1-0' THEN 1
+      WHEN g.black_account_id = m.id AND g.result = '0-1' THEN 1
+      ELSE 0
+    END) / COUNT(*), 1) AS win_pct
+  FROM games g
+  JOIN accounts m ON m.is_me = 1
+    AND (g.white_account_id = m.id OR g.black_account_id = m.id)
+  JOIN accounts opp ON opp.id = (
+    CASE WHEN g.white_account_id = m.id THEN g.black_account_id ELSE g.white_account_id END
+  )
+  GROUP BY opp.username
+  HAVING games >= 3
+  ORDER BY win_pct ASC
+  LIMIT 20
+"
+```
+
+### Where am I already losing? — engine eval at positions I visit
+
+```nu
+$db | query db "
+  SELECT
+    p.canonical_fen,
+    ps.occurrences,
+    ps.losses,
+    e.centipawn,
+    e.best_move_san
+  FROM position_player_stats ps
+  JOIN accounts m ON m.is_me = 1 AND ps.account_id = m.id
+  JOIN positions p ON p.id = ps.position_id
+  JOIN position_engine_evals e ON e.position_id = p.id
+  WHERE ps.occurrences >= 2
+  ORDER BY e.centipawn ASC
+  LIMIT 20
+"
+```
+
+### My record vs higher-rated opponents
+
+```nu
+$db | query db "
+  SELECT
+    COUNT(*) AS games,
+    SUM(CASE
+      WHEN g.white_account_id = m.id AND g.result = '1-0' THEN 1
+      WHEN g.black_account_id = m.id AND g.result = '0-1' THEN 1
+      ELSE 0
+    END) AS wins,
+    ROUND(100.0 * SUM(CASE
+      WHEN g.white_account_id = m.id AND g.result = '1-0' THEN 1
+      WHEN g.black_account_id = m.id AND g.result = '0-1' THEN 1
+      ELSE 0
+    END) / COUNT(*), 1) AS win_pct
+  FROM games g
+  JOIN accounts m ON m.is_me = 1
+    AND (g.white_account_id = m.id OR g.black_account_id = m.id)
+  WHERE (
+    (g.white_account_id = m.id AND g.black_elo  > g.white_elo) OR
+    (g.black_account_id = m.id AND g.white_elo  > g.black_elo)
+  )
+"
+```
+
+### Positions needing critter enrichment, with outcome context
+
+```nu
+$db | query db "
+  SELECT
+    p.canonical_fen,
+    q.status,
+    COALESCE(cs.white_wins, 0) AS white_wins,
+    COALESCE(cs.draws, 0)      AS draws,
+    COALESCE(cs.black_wins, 0) AS black_wins,
+    COALESCE(cs.occurrences, 0) AS total
+  FROM position_critter_eval_queue q
+  JOIN positions p ON p.id = q.position_id
+  LEFT JOIN position_color_stats cs ON cs.position_id = p.id
+  WHERE q.status = 'pending'
+  ORDER BY total DESC
+  LIMIT 20
+"
+```
+
+---
+
+## Enrichment workflow
+
+Each evaluator follows the same queue-then-drain pattern:
+
+```nu
+# Critter (decomposed Open Critter eval)
+./main.nu critter-enqueue        # populate queue from all known positions
+./main.nu critter-eval 50        # drain 50 entries
+./main.nu critter-qstats         # check progress
+
+# Static engine eval (Stockfish / lc0)
+./main.nu enqueue 100
+./main.nu eval 20
+./main.nu qstats
+
+# Dynamic move ladder
 ./main.nu dynamic-enqueue
 ./main.nu dynamic-eval 20
+./main.nu dynamic-qstats
 ```
 
-## Direct DB Queries
+Re-running `*-enqueue` is safe — it inserts only positions not already in the queue.
 
-Use Nushell directly against the SQLite file for ad hoc inspection:
-
-```nu
-open ./data/nuchessdb.sqlite | query db "SELECT COUNT(*) AS games FROM games"
-open ./data/nuchessdb.sqlite | query db "SELECT platform, source_game_id, result FROM games ORDER BY id DESC LIMIT 10"
-open ./data/nuchessdb.sqlite | query db "SELECT canonical_hash, canonical_fen FROM positions ORDER BY id DESC LIMIT 5"
-```
-
-## Fun Queries
-
-```nu
-open ./data/nuchessdb.sqlite | query db "SELECT opponent, COUNT(*) AS games FROM (SELECT CASE WHEN g.white_account_id = m.id THEN b.username ELSE w.username END AS opponent FROM games g JOIN accounts m ON m.is_me = 1 AND (g.white_account_id = m.id OR g.black_account_id = m.id) LEFT JOIN accounts w ON w.id = g.white_account_id LEFT JOIN accounts b ON b.id = g.black_account_id) GROUP BY opponent ORDER BY games DESC LIMIT 10"
-open ./data/nuchessdb.sqlite | query db "SELECT opponent, AVG(opponent_elo) AS avg_elo FROM (SELECT CASE WHEN g.white_account_id = m.id THEN b.username ELSE w.username END AS opponent, CASE WHEN g.white_account_id = m.id THEN g.black_elo ELSE g.white_elo END AS opponent_elo FROM games g JOIN accounts m ON m.is_me = 1 AND (g.white_account_id = m.id OR g.black_account_id = m.id) LEFT JOIN accounts w ON w.id = g.white_account_id LEFT JOIN accounts b ON b.id = g.black_account_id) WHERE opponent_elo IS NOT NULL GROUP BY opponent ORDER BY avg_elo DESC LIMIT 50"
-```
-
-## Benchmark
-
-```bash
-./main.nu bench chesscom all <your-username>
-```
-
-## Enrichment Queue
-
-Queue the most-played positions first:
-
-```bash
-./main.nu enqueue 100
-./main.nu queue 20
-```
-
-## Engine Eval
-
-Configure your engine in `config/nuchessdb.nuon`, then run:
-
-```bash
-./main.nu eval 20
-./main.nu engine 20
-./main.nu qstats
-```
-
-The engine config supports a binary path plus model/depth knobs, so you can point it at Stockfish or lc0-style setups later.
-
-## Critter Eval
-
-Build `critter-eval` next to this repo, or set `enrichment.critter.binary` in `config/nuchessdb.nuon`.
-
-```bash
-./main.nu critter-enqueue
-./main.nu critter-eval 20
-./main.nu critter-queue 20
-./main.nu critter-qstats
-```
+---
 
 ## Related projects
 
-- `nu_plugin_shakmaty`: deterministic FEN, move, and hash operations.
-- `critter-eval`: decomposed evaluation backend for position enrichment.
-- `nuagent`: JSON enrichment and commentary generation (planned).
-
-## Dynamic Analysis
-
-Dynamic move analysis is stored separately from static quantification.
-Each run is keyed by the position zobrist plus an engine profile with only `engine_name` and `elo_tune`, and the top 5 moves are stored as ranked rows for later comparison.
+- [`nu_plugin_shakmaty`](../nu_plugin_shakmaty) — Nushell plugin for deterministic chess semantics
+- [`critter-eval`](../critter-eval) — decomposed Open Critter evaluation backend
+- [`open-critter`](../open-critter) — Open Critter engine source (Pascal, UCI)

@@ -92,7 +92,42 @@ export def run [args: list<string>] {
     "dynamic-qstats" => { dynamic-queue-stats | to nuon | print }
     "bench" => { benchmark-sync $rest | to nuon | print }
     "qstats" => { queue-stats | to nuon | print }
-    "help" => { print "nuchessdb commands: init, import <path> [platform], sync chesscom [all] <username>, bench <sync-args...>, eval [limit], engine [limit], critter-enqueue [limit], critter-eval [limit], critter-queue [limit], critter-qstats, dynamic-enqueue [limit], dynamic-eval [limit], dynamic-queue [limit], dynamic-qstats, qstats, status, recent [limit], top [limit], report [limit], opponents [limit], rated [limit], queue [limit], enqueue [limit]" }
+    "help" => { print "nuchessdb — Nushell chess database and enrichment pipeline
+
+SETUP
+  init                        Create the SQLite schema
+
+IMPORT & SYNC
+  import <path> [platform]    Import a PGN or chess.com JSON export
+  sync chesscom [all] <user>  Download and import chess.com archives
+  bench <sync-args...>        Time a sync run
+
+QUERIES
+  status                      Overview: game count, position count, queue depth
+  recent [limit]              Most recently imported games  (default 10)
+  top [limit]                 Most-visited positions        (default 20)
+  report [limit]              Positions with outcome stats  (default 20)
+  opponents [limit]           Most-played opponents         (default 20)
+  rated [limit]               Opponents sorted by rating    (default 50)
+
+ENGINE EVAL (Stockfish / lc0 static)
+  enqueue [limit]             Queue hot positions for engine eval   (default 50)
+  queue [limit]               Show pending engine eval queue        (default 50)
+  qstats                      Engine eval queue statistics
+  eval [limit]                Run engine eval on queued positions   (default 20)
+  engine [limit]              Show stored engine eval results       (default 20)
+
+CRITTER EVAL (Open Critter decomposed)
+  critter-enqueue [limit]     Queue positions for critter eval      (default all)
+  critter-queue [limit]       Show pending critter eval queue       (default 20)
+  critter-qstats              Critter eval queue statistics
+  critter-eval [limit]        Run critter eval on queued positions  (default 20)
+
+DYNAMIC EVAL (engine move ladder)
+  dynamic-enqueue [limit]     Queue positions for dynamic eval      (default all)
+  dynamic-queue [limit]       Show pending dynamic eval queue       (default 20)
+  dynamic-qstats              Dynamic eval queue statistics
+  dynamic-eval [limit]        Run dynamic eval on queued positions  (default 20)" }
     _ => { print $'unknown command: ($command)' }
   }
 }

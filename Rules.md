@@ -47,5 +47,5 @@
 - Use `nu_plugin_shakmaty` for deterministic chess semantics.
 - Use `critter-eval` for decomposed evaluation enrichment.
 - Use engine-specific model profiles for dynamic move analysis.
-- Use `nuagent` for JSON enrichment and LLM-facing augmentation.
+  - Use LLM tooling for commentary and enrichment (planned).
 - Keep analysis reproducible where possible.
