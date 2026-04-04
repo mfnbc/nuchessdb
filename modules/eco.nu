@@ -10,7 +10,7 @@ def eco-data [] {
 # Returns the matching opening record, or null if none is found.
 export def eco-lookup [fen: string] {
   let fen4 = ($fen | split row " " | first 4 | str join " ")
-  let match = (eco-data | where fen == $fen4 | first -i 1)
+  let match = (eco-data | where fen == $fen4)
   if ($match | is-empty) { null } else { $match | first }
 }
 
@@ -22,7 +22,7 @@ export def eco-classify [] {
   let openings = (eco-data)
   each { |row|
     let fen4 = ($row.canonical_fen | split row " " | first 4 | str join " ")
-    let match = ($openings | where fen == $fen4 | first -i 1)
+    let match = ($openings | where fen == $fen4)
     if ($match | is-empty) {
       $row | insert eco_code "" | insert opening_name ""
     } else {
