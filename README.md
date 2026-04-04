@@ -27,6 +27,8 @@ Inside Nushell:
 plugin add /full/path/to/nu_plugin_shakmaty/target/release/nu_plugin_shakmaty
 ```
 
+Then restart Nushell (or start a new session) for the plugin to be active.
+
 ### 2. Build `critter-eval`
 
 ```sh
@@ -58,7 +60,7 @@ cargo build --release
     dynamic: {
       binary:      "/path/to/lc0"   # UCI engine binary
       engine_name: "lc0"
-      elo_tune:    1200             # --WeightsFile ELO target passed to the engine
+      elo_tune:    1200             # engine skill/ELO target for dynamic analysis
       depth:       12
     }
     engine: {
@@ -71,8 +73,8 @@ cargo build --release
       nodes:       0       # 0 = not used
       movetime_ms: 0       # 0 = not used
     }
-    llm_model:      ""
-    prompt_version: ""
+    llm_model:      ""   # planned: model name for LLM commentary
+    prompt_version: ""   # planned: prompt version tag
   }
 }
 ```
