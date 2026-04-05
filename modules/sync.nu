@@ -11,6 +11,7 @@ def default-sync-state [username: string] {
     provider: 'chesscom'
     username: $username
     completed_archives: []
+    missing_archives: []
     current_archive: null
     updated_at: null
   }
@@ -81,6 +82,7 @@ def sync-chesscom-all [username: string] {
   let total = ($archives.archives | length)
   let state = (load-sync-state $username)
   let completed = ($state.completed_archives | default [])
+  let missing = ($state.missing_archives | default [])
 
   $archives.archives
   | enumerate
@@ -100,6 +102,7 @@ def sync-chesscom-all [username: string] {
         if $saved == null {
           let skipped_state = (
             $next_state
+            | upsert missing_archives ($missing | append $archive_id | uniq)
             | upsert current_archive null
             | upsert updated_at (date now)
           )
@@ -108,9 +111,11 @@ def sync-chesscom-all [username: string] {
           { archive_url: $archive_url, archive_id: $archive_id, skipped: true, reason: 'no pgn found' }
         } else {
           let imported = (import-games [$saved.file "chesscom"])
+          let remaining_missing = ($missing | where { |a| $a != $archive_id })
           let finished_state = (
             $next_state
-            | upsert completed_archives ($completed | append $archive_id)
+            | upsert completed_archives ($completed | append $archive_id | uniq)
+            | upsert missing_archives $remaining_missing
             | upsert current_archive null
             | upsert updated_at (date now)
           )
@@ -120,6 +125,45 @@ def sync-chesscom-all [username: string] {
         }
       }
     }
+}
+
+def sync-chesscom-update [username: string] {
+  let state = (load-sync-state $username)
+  let missing = ($state.missing_archives | default [])
+
+  if ($missing | is-empty) {
+    { username: $username, updated: [], skipped: [] }
+  } else {
+    let archives = ($missing | each { |archive_id|
+      let parts = ($archive_id | split row '-')
+      if ($parts | length) != 2 {
+        { archive_id: $archive_id, skipped: true, reason: 'invalid archive id' }
+      } else {
+        let archive_url = $'https://api.chess.com/pub/player/($username)/games/($parts.0)/($parts.1)'
+        let saved = (save-archive-pgn $username $archive_url)
+
+        if $saved == null {
+          { archive_id: $archive_id, archive_url: $archive_url, skipped: true, reason: 'no pgn found' }
+        } else {
+          let imported = (import-games [$saved.file "chesscom"])
+          { archive_id: $archive_id, archive_url: $archive_url, skipped: false, saved: $saved, imported: $imported }
+        }
+      }
+    })
+
+    let remaining_missing = ($archives | where skipped == true | get archive_id)
+    let completed = ($state.completed_archives | default [])
+    let finished_state = (
+      $state
+      | upsert completed_archives ($completed | append ($archives | where skipped == false | get archive_id) | uniq)
+      | upsert missing_archives $remaining_missing
+      | upsert current_archive null
+      | upsert updated_at (date now)
+    )
+
+    save-sync-state $username $finished_state | ignore
+    { username: $username, updated: ($archives | where skipped == false), skipped: ($archives | where skipped == true) }
+  }
 }
 
 export def sync-games [args: list<string>] {
@@ -137,6 +181,9 @@ export def sync-games [args: list<string>] {
       if $mode == "all" {
         print $'sync: chesscom all ($username)'
         { provider: $provider, mode: $mode, username: $username, archives: (sync-chesscom-all $username) }
+      } else if $mode == "update" {
+        print $'sync: chesscom update ($username)'
+        { provider: $provider, mode: $mode, username: $username, archives: (sync-chesscom-update $username) }
       } else {
         { provider: $provider, mode: $mode, username: $username, archive: (sync-chesscom-latest $username) }
       }
