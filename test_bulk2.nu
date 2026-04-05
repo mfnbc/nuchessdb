@@ -1,3 +1,5 @@
+# Pre-refactor exploration script — kept as a historical artifact.
+# Uses batch.positions (now batch.unique_positions) and chunks (now chunks-of); not called from main.nu.
 use ./modules/utils.nu *
 use ./modules/config.nu *
 use ./modules/db.nu *
