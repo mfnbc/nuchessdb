@@ -1,3 +1,4 @@
 export def load-config [] {
-  open ./config/nuchessdb.nuon
+  let path = ($env | get -o NUCHESSDB_CONFIG | default './config/nuchessdb.nuon')
+  open $path
 }

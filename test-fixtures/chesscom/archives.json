@@ -1,0 +1,9 @@
+{
+  archives: [
+    "https://api.chess.com/pub/player/hikaru/games/2024/01"
+    "https://api.chess.com/pub/player/hikaru/games/2024/02"
+    "https://api.chess.com/pub/player/hikaru/games/2024/03"
+    "https://api.chess.com/pub/player/hikaru/games/2024/04"
+    "https://api.chess.com/pub/player/hikaru/games/2024/05"
+  ]
+}

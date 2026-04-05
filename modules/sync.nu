@@ -91,9 +91,15 @@ export def clean-sync-cache [] {
 }
 
 def load-chesscom-archives [username: string] {
-  try { http get $'https://api.chess.com/pub/player/($username)/games/archives' } catch {
-    print $'sync: chesscom archives unavailable for ($username), skipping'
-    null
+  let fixture = ($env | get -o NUCHESSDB_TEST_ARCHIVES_JSON | default "")
+
+  if ($fixture | is-empty) == false {
+    open $fixture
+  } else {
+    try { http get $'https://api.chess.com/pub/player/($username)/games/archives' } catch {
+      print $'sync: chesscom archives unavailable for ($username), skipping'
+      null
+    }
   }
 }
 
@@ -114,6 +120,24 @@ def latest-chesscom-archive [username: string] {
 }
 
 def save-archive-pgn [username: string, archive_url: string] {
+  let fixture_mode = ($env | get -o NUCHESSDB_TEST_PGN_MODE | default "")
+
+  if $fixture_mode == "fixture" or $fixture_mode == "fixture-ready" {
+    let archive_id = ($archive_url | split row "/" | last 2 | str join "-")
+    let month = ($archive_url | split row "/" | last 2 | str join "/")
+    let out_dir = $'./data/raw/chesscom/($username)'
+    let out_file = $'($out_dir)/($archive_id).pgn'
+    let fixture = ($env | get -o NUCHESSDB_TEST_PGN_FIXTURE | default './test-fixtures/chesscom/hikaru-game.pgn')
+
+    if $fixture_mode == "fixture" and $month == '2024/03' {
+      print $'sync: chesscom archive ($archive_id) no pgn found, skipping'
+      null
+    } else {
+      mkdir $out_dir
+      open $fixture | save --force $out_file
+      { archive_url: $archive_url, pgn_url: $'($archive_url)/pgn', file: $out_file }
+    }
+  } else {
   let archive_id = ($archive_url | split row "/" | last 2 | str join "-")
   let pgn_url = $'($archive_url)/pgn'
   let out_dir = $'./data/raw/chesscom/($username)'
@@ -131,6 +155,7 @@ def save-archive-pgn [username: string, archive_url: string] {
   $raw_pgn | save --force $out_file
 
   { archive_url: $archive_url, pgn_url: $pgn_url, file: $out_file }
+  }
 }
 
 def sync-chesscom-latest [username: string] {
@@ -154,40 +179,37 @@ def sync-chesscom-all [username: string] {
   }
 
   let total = ($archives.archives | length)
-  let state = (load-sync-state $username)
-  let completed = ($state.completed_archives | default [])
+  mut state = (load-sync-state $username)
+  mut results = []
 
-  $archives.archives
-  | enumerate
-  | each { |it|
-      let archive_url = $it.item
-      let n = ($it.index + 1)
-      let archive_id = ($archive_url | split row '/' | last 2 | str join '/')
+  for it in ($archives.archives | enumerate) {
+    let archive_url = $it.item
+    let n = ($it.index + 1)
+    let archive_id = ($archive_url | split row '/' | last 2 | str join '/')
+    let completed = ($state.completed_archives | default [])
 
-      if ($completed | any { |a| $a == $archive_id }) {
-        print $'sync: chesscom all ($username) ($n)/($total) skip ($archive_id)'
-        { archive_url: $archive_url, archive_id: $archive_id, skipped: true }
+    if ($completed | any { |a| $a == $archive_id }) {
+      print $'sync: chesscom all ($username) ($n)/($total) skip ($archive_id)'
+      $results = ($results | append { archive_url: $archive_url, archive_id: $archive_id, skipped: true })
+    } else {
+      print $'sync: chesscom all ($username) ($n)/($total) import ($archive_id)'
+      $state = ($state | upsert current_archive $archive_id)
+      save-sync-state $username $state | ignore
+      let saved = (save-archive-pgn $username $archive_url)
+      if $saved == null {
+        $state = (update-sync-state $state $archive_id false ((date now) | into string))
+        save-sync-state $username $state | ignore
+        $results = ($results | append { archive_url: $archive_url, archive_id: $archive_id, skipped: true, reason: 'no pgn found' })
       } else {
-        print $'sync: chesscom all ($username) ($n)/($total) import ($archive_id)'
-        let next_state = ($state | upsert current_archive $archive_id)
-        save-sync-state $username $next_state | ignore
-        let saved = (save-archive-pgn $username $archive_url)
-        if $saved == null {
-          let current_state = (load-sync-state $username)
-          let skipped_state = (update-sync-state $current_state $archive_id false ((date now) | into string))
-
-          save-sync-state $username $skipped_state | ignore
-          { archive_url: $archive_url, archive_id: $archive_id, skipped: true, reason: 'no pgn found' }
-        } else {
-          let imported = (import-games [$saved.file "chesscom"])
-          let current_state = (load-sync-state $username)
-          let finished_state = (update-sync-state $current_state $archive_id true ((date now) | into string))
-
-          save-sync-state $username $finished_state | ignore
-          { archive_url: $archive_url, archive_id: $archive_id, skipped: false, saved: $saved, imported: $imported }
-        }
+        let imported = (import-games [$saved.file "chesscom"])
+        $state = (update-sync-state $state $archive_id true ((date now) | into string))
+        save-sync-state $username $state | ignore
+        $results = ($results | append { archive_url: $archive_url, archive_id: $archive_id, skipped: false, saved: $saved, imported: $imported })
       }
     }
+  }
+
+  $results
 }
 
 def sync-chesscom-update [username: string] {
@@ -227,6 +249,10 @@ def sync-chesscom-update [username: string] {
     save-sync-state $username $finished_state | ignore
     { username: $username, updated: ($archives | where skipped == false), skipped: ($archives | where skipped == true) }
   }
+}
+
+export def sync-chesscom-status [username: string] {
+  load-sync-state $username
 }
 
 export def sync-state-transition-demo [] {

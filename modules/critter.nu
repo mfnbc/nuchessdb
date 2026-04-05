@@ -163,6 +163,37 @@ def critter-model [] {
   ($ccfg.model | default "")
 }
 
+def critter-fixture-record [fen: string] {
+  {
+    fen: $fen
+    normalized_fen: $fen
+    side_to_move: 'white'
+    phase: 0
+    final_score: 0
+    engine_score: null
+    legal: {
+      is_legal: true
+      is_check: false
+      is_checkmate: false
+      is_stalemate: false
+      is_insufficient_material: false
+      legal_move_count: 1
+    }
+    groups: {
+      material: { mg: 0, eg: 0, blended: 0, terms: {} }
+      pawn_structure: { mg: 0, eg: 0, blended: 0, terms: {} }
+      piece_activity: { mg: 0, eg: 0, blended: 0, terms: {} }
+      king_safety: { mg: 0, eg: 0, blended: 0, terms: {} }
+      passed_pawns: { mg: 0, eg: 0, blended: 0, terms: {} }
+      development: { mg: 0, eg: 0, blended: 0, terms: {} }
+      scaling: { value: 0, factor: 1 }
+      drawishness: { value: 0, factor: 1 }
+      override_: { value: 0, factor: 1 }
+    }
+    checks: { sum_groups: 0, matches_final: true, delta: null }
+  }
+}
+
 export def refresh-critter-enrichment-queue [limit: int = 100000] {
   let cfg = load-config
   let db_path = $cfg.database.path
@@ -194,6 +225,7 @@ export def critter-eval-queue [limit: int = 20] {
   let binary = (critter-binary)
   let cn = (critter-name)
   let cm = (critter-model)
+  let fixture_mode = ($env | get -o NUCHESSDB_TEST_CRITTER_MODE | default "")
 
   # WAL mode: reduces write contention, avoids full-db locks on each fsync
   open $db_path | query db "PRAGMA journal_mode=WAL;" | ignore
@@ -209,14 +241,18 @@ export def critter-eval-queue [limit: int = 20] {
     let ids_in = ($jobs | get position_id | each { into string } | str join ", ")
     open $db_path | query db (["UPDATE position_critter_eval_queue SET status = 'running', started_at = ", (sql-string $started_at), ", last_error = NULL WHERE position_id IN (", $ids_in, ");"] | str join) | ignore
 
-    # Pipe all FENs to a single critter-eval invocation
-    let fens_input = ($jobs | get canonical_fen | str join "\n")
-    let raw_output = (try { $fens_input | ^($binary) } catch { "" })
-    let output_lines = ($raw_output | lines | where { |line| not ($line | str trim | is-empty) })
     let finished_at = (date now | format date "%Y-%m-%d %H:%M:%S")
 
     # Parse results into lists — no DB calls inside this loop
-    let results = (
+    let results = if $fixture_mode == "fixture" {
+      $jobs | each { |job|
+        { position_id: $job.position_id, status: "done", error: null, record: (critter-fixture-record $job.canonical_fen) }
+      }
+    } else {
+      let fens_input = ($jobs | get canonical_fen | str join "\n")
+      let raw_output = (try { $fens_input | ^($binary) } catch { "" })
+      let output_lines = ($raw_output | lines | where { |line| not ($line | str trim | is-empty) })
+
       $jobs
       | enumerate
       | each { |item|
@@ -236,7 +272,7 @@ export def critter-eval-queue [limit: int = 20] {
             }
           }
         }
-    )
+    }
 
     let done_results   = ($results | where status == "done")
     let failed_results = ($results | where status == "failed")
