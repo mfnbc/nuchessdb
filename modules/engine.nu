@@ -88,7 +88,8 @@ def save-engine-eval [db, position_id: int, engine_name: string, engine_model: s
 export def eval-queue [limit: int = 20] {
   let cfg = load-config
   let db = (open $cfg.database.path)
-  let binary = (engine-binary)
+  let fixture_mode = ($env | get -o NUCHESSDB_TEST_ENGINE_MODE | default "")
+  let binary = (if $fixture_mode == "fixture" { null } else { (engine-binary) })
   let jobs = ($db | query db ([
     "SELECT q.position_id, p.canonical_fen, q.priority FROM position_enrichment_queue q JOIN positions p ON p.id = q.position_id WHERE q.status = 'pending' ORDER BY q.priority DESC, q.queued_at ASC LIMIT ", ($limit | into string)
   ] | str join))
@@ -97,10 +98,10 @@ export def eval-queue [limit: int = 20] {
     { evaluated: 0, message: "queue empty" }
   } else {
     let evaluated = (
-      $jobs
-      | each { |job|
-          let position_id = $job.position_id
-          let fen = $job.canonical_fen
+        $jobs
+        | each { |job|
+            let position_id = $job.position_id
+            let fen = $job.canonical_fen
           let depth = (engine-depth)
           let movetime = (engine-movetime)
           let engine_name = (engine-name)
@@ -109,14 +110,23 @@ export def eval-queue [limit: int = 20] {
           $db | query db (["UPDATE position_enrichment_queue SET status = 'running', started_at = ", (sql-string $started_at), ", last_error = NULL WHERE position_id = ", ($position_id | into string), ";"] | str join) | ignore
 
           try {
-            let eval_lines = if $movetime > 0 {
-              ["uci", "isready", ($'position fen ($fen)'), ($'go movetime ($movetime)'), "quit"]
+            let parsed = if $fixture_mode == "fixture" {
+              {
+                centipawn: 0
+                mate: null
+                best_move_uci: "e2e4"
+                analysis_json: "fixture"
+              }
             } else {
-              ["uci", "isready", ($'position fen ($fen)'), ($'go depth ($depth)'), "quit"]
-            }
+              let eval_lines = if $movetime > 0 {
+                ["uci", "isready", ($'position fen ($fen)'), ($'go movetime ($movetime)'), "quit"]
+              } else {
+                ["uci", "isready", ($'position fen ($fen)'), ($'go depth ($depth)'), "quit"]
+              }
 
-            let raw = ($eval_lines | str join "\n" | ^($binary))
-            let parsed = (parse-engine-output $raw)
+              let raw = ($eval_lines | str join "\n" | ^($binary))
+              parse-engine-output $raw
+            }
             let best_move_san = (engine-best-move-san $fen $parsed.best_move_uci)
             save-engine-eval $db $position_id $engine_name $engine_model $depth 0 $parsed.centipawn $parsed.mate $parsed.best_move_uci $best_move_san $parsed.analysis_json
 

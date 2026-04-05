@@ -20,13 +20,14 @@ export def eco-lookup [fen: string] {
 # Rows with no ECO match receive empty strings for those columns.
 export def eco-classify [] {
   let openings = (eco-data)
-  each { |row|
-    let fen4 = ($row.canonical_fen | split row " " | first 4 | str join " ")
-    let match = ($openings | where fen == $fen4)
-    if ($match | is-empty) {
-      $row | insert eco_code "" | insert opening_name ""
-    } else {
-      $row | insert eco_code ($match | first | get eco_code) | insert opening_name ($match | first | get name)
+  $in
+  | each { |row|
+      let fen4 = ($row.canonical_fen | split row " " | first 4 | str join " ")
+      let match = ($openings | where fen == $fen4)
+      if ($match | is-empty) {
+        $row | insert eco_code "" | insert opening_name ""
+      } else {
+        $row | insert eco_code ($match | first | get eco_code) | insert opening_name ($match | first | get name)
+      }
     }
-  }
 }

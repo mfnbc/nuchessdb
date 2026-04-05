@@ -194,7 +194,8 @@ def save-dynamic-run [position_zobrist: string, profile_id: int, fen: string, pa
 export def dynamic-eval-queue [limit: int = 20] {
   let cfg = load-config
   let db_path = $cfg.database.path
-  let binary = (dynamic-engine-binary)
+  let fixture_mode = ($env | get -o NUCHESSDB_TEST_DYNAMIC_MODE | default "")
+  let binary = (if $fixture_mode == "fixture" { null } else { (dynamic-engine-binary) })
   let profile_id = (ensure-dynamic-profile-id)
   let depth = (dynamic-depth)
   let elo_tune = (dynamic-elo-tune)
@@ -214,18 +215,28 @@ export def dynamic-eval-queue [limit: int = 20] {
           open $db_path | query db (["UPDATE position_dynamic_queue SET status = 'running', started_at = ", (sql-string $started_at), ", last_error = NULL WHERE position_zobrist = ", (sql-string $position_zobrist), " AND profile_id = ", (sql-int $profile_id), ";"] | str join) | ignore
 
           try {
-            let eval_lines = [
-              "uci",
-              ($'setoption name MultiPV value 5'),
-              ($'setoption name UCI_LimitStrength value true'),
-              ($'setoption name UCI_Elo value ($elo_tune)'),
-              "isready",
-              ($'position fen ($fen)'),
-              ($'go depth ($depth)'),
-              "quit"
-            ]
-            let raw = ($eval_lines | str join "\n" | ^($binary))
-            let parsed = (parse-dynamic-output $raw)
+            let parsed = if $fixture_mode == "fixture" {
+              {
+                top_moves: [{ rank: 1, move_uci: 'e2e4', q_cp: 0, q_mate: null, pv: 'e2e4' }]
+                best_move_uci: 'e2e4'
+                value_cp: 0
+                value_mate: null
+                analysis_json: 'fixture'
+              }
+            } else {
+              let eval_lines = [
+                "uci",
+                ($'setoption name MultiPV value 5'),
+                ($'setoption name UCI_LimitStrength value true'),
+                ($'setoption name UCI_Elo value ($elo_tune)'),
+                "isready",
+                ($'position fen ($fen)'),
+                ($'go depth ($depth)'),
+                "quit"
+              ]
+              let raw = ($eval_lines | str join "\n" | ^($binary))
+              parse-dynamic-output $raw
+            }
             let saved = (save-dynamic-run $position_zobrist $profile_id $fen $parsed $depth 0)
             let finished_at = (date now | format date "%Y-%m-%d %H:%M:%S")
             open $db_path | query db (["UPDATE position_dynamic_queue SET status = 'done', finished_at = ", (sql-string $finished_at), " WHERE position_zobrist = ", (sql-string $position_zobrist), " AND profile_id = ", (sql-int $profile_id), ";"] | str join) | ignore
