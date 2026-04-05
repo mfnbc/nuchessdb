@@ -28,7 +28,7 @@ export def run [args: list<string>] {
     "init" => { init-db | to nuon | print }
     "import" => { import-games $rest | to nuon | print }
     "sync" => { sync-games $rest | to nuon | print }
-    "clean" => { clean-db | to nuon | print }
+    "clean" => { { database: (clean-db), sync_cache: (clean-sync-cache) } | to nuon | print }
     "status" => { show-overview | to nuon | print }
     "recent" => {
       let limit = if ($rest | is-empty) { 10 } else { $rest | get 0 | into int }
@@ -111,7 +111,7 @@ IMPORT & SYNC
   import <path> [platform]    Import a PGN or chess.com JSON export
   sync chesscom [all] <user>  Download and import chess.com archives
   sync chesscom update <user> Retry previously missing chess.com archives
-  clean                       Remove the SQLite database
+  clean                       Remove database and chess.com sync cache
   bench <sync-args...>        Time a sync run
 
 QUERIES

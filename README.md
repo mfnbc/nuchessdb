@@ -90,7 +90,7 @@ cargo build --release
 # 2. Download and import every chess.com archive for your account
 ./main.nu sync chesscom all <your-username>
 
-# 3. If you want a fresh retry, clean the DB and chess.com sync state
+# 3. If you want a fresh retry, reset the database and sync cache
 ./main.nu clean
 
 # 4. Recreate the schema and retry sync from scratch
@@ -123,7 +123,7 @@ cargo build --release
 | `import <path> [platform]` | Import a local PGN or chess.com JSON export |
 | `sync chesscom [all] <user>` | Download and import chess.com archives |
 | `sync chesscom update <user>` | Retry previously missing chess.com archives |
-| `clean` | Remove the SQLite database |
+| `clean` | Remove the database and chess.com sync cache |
 | `bench <sync-args...>` | Time a sync run |
 | `status` | Overview: game count, position count, queue depths |
 | `recent [limit]` | Most recently imported games (default 10) |
