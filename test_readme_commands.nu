@@ -61,7 +61,6 @@ if $eval_result.evaluated < 0 {
 }
 
 let engine_rows = (engine-summary 10)
-
 let _ = $engine_rows
 
 let _ = (critter-enqueue-games 10)

@@ -42,14 +42,6 @@ export def run [args: list<string>] {
       let limit = if ($rest | is-empty) { 20 } else { $rest | get 0 | into int }
       position-report $limit | to nuon | print
     }
-    "opponents" => {
-      let limit = if ($rest | is-empty) { 20 } else { $rest | get 0 | into int }
-      most-played-opponents $limit | to nuon | print
-    }
-    "rated" => {
-      let limit = if ($rest | is-empty) { 50 } else { $rest | get 0 | into int }
-      highest-rated-opponents $limit | to nuon | print
-    }
     "queue" => {
       let limit = if ($rest | is-empty) { 50 } else { $rest | get 0 | into int }
       queued-enrichment $limit | to nuon | print
@@ -119,8 +111,8 @@ QUERIES
   recent [limit]              Most recently imported games  (default 10)
   top [limit]                 Most-visited positions        (default 20)
   report [limit]              Positions with outcome stats  (default 20)
-  opponents [limit]           Most-played opponents         (default 20)
-  rated [limit]               Opponents sorted by rating    (default 50)
+  opponents [limit]           Use the documented SQL query   (see README)
+  rated [limit]               Use the documented SQL query   (see README)
 
 ENGINE EVAL (Stockfish / lc0 static)
   enqueue [limit]             Queue hot positions for engine eval   (default 50)
