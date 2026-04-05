@@ -46,9 +46,16 @@ def latest-chesscom-archive [username: string] {
 def save-archive-pgn [username: string, archive_url: string] {
   let archive_id = ($archive_url | split row "/" | last 2 | str join "-")
   let pgn_url = $'($archive_url)/pgn'
-  let raw_pgn = (http get $pgn_url)
   let out_dir = $'./data/raw/chesscom/($username)'
   let out_file = $'($out_dir)/($archive_id).pgn'
+  let raw_pgn = (try { http get $pgn_url } catch {
+    print $'sync: chesscom archive ($archive_id) no pgn found, skipping'
+    null
+  })
+
+  if $raw_pgn == null {
+    return null
+  }
 
   mkdir $out_dir
   $raw_pgn | save --force $out_file
@@ -60,9 +67,13 @@ def sync-chesscom-latest [username: string] {
   print $'sync: chesscom latest ($username)'
   let archive_url = (latest-chesscom-archive $username)
   let saved = (save-archive-pgn $username $archive_url)
-  let imported = (import-games [$saved.file "chesscom"])
 
-  { archive_url: $archive_url, saved: $saved, imported: $imported }
+  if $saved == null {
+    { archive_url: $archive_url, skipped: true, reason: 'no pgn found' }
+  } else {
+    let imported = (import-games [$saved.file "chesscom"])
+    { archive_url: $archive_url, saved: $saved, imported: $imported }
+  }
 }
 
 def sync-chesscom-all [username: string] {
@@ -86,16 +97,27 @@ def sync-chesscom-all [username: string] {
         let next_state = ($state | upsert current_archive $archive_id)
         save-sync-state $username $next_state | ignore
         let saved = (save-archive-pgn $username $archive_url)
-        let imported = (import-games [$saved.file "chesscom"])
-        let finished_state = (
-          $next_state
-          | upsert completed_archives ($completed | append $archive_id)
-          | upsert current_archive null
-          | upsert updated_at (date now)
-        )
+        if $saved == null {
+          let skipped_state = (
+            $next_state
+            | upsert current_archive null
+            | upsert updated_at (date now)
+          )
 
-        save-sync-state $username $finished_state | ignore
-        { archive_url: $archive_url, archive_id: $archive_id, skipped: false, saved: $saved, imported: $imported }
+          save-sync-state $username $skipped_state | ignore
+          { archive_url: $archive_url, archive_id: $archive_id, skipped: true, reason: 'no pgn found' }
+        } else {
+          let imported = (import-games [$saved.file "chesscom"])
+          let finished_state = (
+            $next_state
+            | upsert completed_archives ($completed | append $archive_id)
+            | upsert current_archive null
+            | upsert updated_at (date now)
+          )
+
+          save-sync-state $username $finished_state | ignore
+          { archive_url: $archive_url, archive_id: $archive_id, skipped: false, saved: $saved, imported: $imported }
+        }
       }
     }
 }
