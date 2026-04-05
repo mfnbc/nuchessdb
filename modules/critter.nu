@@ -1,5 +1,92 @@
 use ./utils.nu *
 use ./config.nu *
+use ./db.nu *
+
+# Split a list into non-overlapping chunks of at most chunk_size items.
+def chunks-of [chunk_size: int] {
+  let rows = $in
+  let total = ($rows | length)
+  if $total == 0 { return [] }
+  let num_chunks = (($total + $chunk_size - 1) // $chunk_size)
+  seq 0 ($num_chunks - 1) | each { |i|
+    $rows | skip ($i * $chunk_size) | first $chunk_size
+  }
+}
+
+# Build a single VALUES row tuple string for bulk critter-eval INSERT.
+# Returns a string like: (42,'name','model','fen',...)
+def critter-eval-values-row [position_id: int, record: record, cn: string, cm: string, created_at: string] {
+  [
+    "(", ($position_id | into string), ",",
+    (sql-string $cn), ",", (sql-string $cm), ",",
+    (sql-string $record.normalized_fen), ",",
+    (sql-int $record.phase), ",",
+    ($record.final_score | into string), ",",
+    (sql-int $record.engine_score), ",",
+    (bool-int $record.legal.is_legal), ",",
+    (bool-int $record.legal.is_check), ",",
+    (bool-int $record.legal.is_checkmate), ",",
+    (bool-int $record.legal.is_stalemate), ",",
+    (bool-int $record.legal.is_insufficient_material), ",",
+    ($record.legal.legal_move_count | into string), ",",
+    (sql-string ($record.groups.material | to json)), ",",
+    (sql-string ($record.groups.pawn_structure | to json)), ",",
+    (sql-string ($record.groups.piece_activity | to json)), ",",
+    (sql-string ($record.groups.king_safety | to json)), ",",
+    (sql-string ($record.groups.passed_pawns | to json)), ",",
+    (sql-string ($record.groups.development | to json)), ",",
+    (sql-int $record.groups.scaling.value), ",",
+    (sql-int $record.groups.scaling.factor), ",",
+    (sql-int $record.groups.drawishness.value), ",",
+    (sql-int $record.groups.drawishness.factor), ",",
+    (sql-int $record.groups.override_.value), ",",
+    (sql-int $record.groups.override_.factor), ",",
+    (sql-int $record.checks.sum_groups), ",",
+    (bool-int $record.checks.matches_final), ",",
+    (sql-int $record.checks.delta), ",",
+    (sql-string ($record | to json)), ",",
+    (sql-string $created_at),
+    ")"
+  ] | str join
+}
+
+# Build a list of bulk INSERT SQL statements (chunked at 400 rows) for critter evals.
+# evals: list of {position_id: int, record: record}
+def bulk-critter-eval-insert-sql [evals: list<record>, cn: string, cm: string, created_at: string] {
+  let conflict_clause = (
+    " ON CONFLICT(position_id, critter_name, critter_model) DO UPDATE SET" +
+    " normalized_fen=excluded.normalized_fen, phase=excluded.phase," +
+    " final_score=excluded.final_score, engine_score=excluded.engine_score," +
+    " legal_is_legal=excluded.legal_is_legal, legal_is_check=excluded.legal_is_check," +
+    " legal_is_checkmate=excluded.legal_is_checkmate, legal_is_stalemate=excluded.legal_is_stalemate," +
+    " legal_is_insufficient_material=excluded.legal_is_insufficient_material," +
+    " legal_move_count=excluded.legal_move_count," +
+    " material_json=excluded.material_json, pawn_structure_json=excluded.pawn_structure_json," +
+    " piece_activity_json=excluded.piece_activity_json, king_safety_json=excluded.king_safety_json," +
+    " passed_pawns_json=excluded.passed_pawns_json, development_json=excluded.development_json," +
+    " scaling_value=excluded.scaling_value, scaling_factor=excluded.scaling_factor," +
+    " drawishness_value=excluded.drawishness_value, drawishness_factor=excluded.drawishness_factor," +
+    " override_value=excluded.override_value, override_factor=excluded.override_factor," +
+    " checks_sum_groups=excluded.checks_sum_groups, checks_matches_final=excluded.checks_matches_final," +
+    " checks_delta=excluded.checks_delta, analysis_json=excluded.analysis_json," +
+    " created_at=excluded.created_at"
+  )
+  let header = (
+    "INSERT INTO position_critter_evals" +
+    " (position_id, critter_name, critter_model, normalized_fen, phase, final_score, engine_score," +
+    " legal_is_legal, legal_is_check, legal_is_checkmate, legal_is_stalemate," +
+    " legal_is_insufficient_material, legal_move_count," +
+    " material_json, pawn_structure_json, piece_activity_json, king_safety_json," +
+    " passed_pawns_json, development_json," +
+    " scaling_value, scaling_factor, drawishness_value, drawishness_factor," +
+    " override_value, override_factor," +
+    " checks_sum_groups, checks_matches_final, checks_delta, analysis_json, created_at) VALUES "
+  )
+  $evals | chunks-of 400 | each { |chunk|
+    let values = ($chunk | each { |e| critter-eval-values-row $e.position_id $e.record $cn $cm $created_at } | str join ",")
+    $header + $values + $conflict_clause
+  }
+}
 
 def critter-config [] {
   let cfg = load-config
@@ -90,11 +177,13 @@ export def critter-queue-stats [] {
 
 export def critter-eval-queue [limit: int = 20] {
   let cfg = load-config
-  let db = (open $cfg.database.path)
+  let db_path = $cfg.database.path
   let binary = (critter-binary)
+  let cn = (critter-name)
+  let cm = (critter-model)
 
   # WAL mode: reduces write contention, avoids full-db locks on each fsync
-  $db | query db "PRAGMA journal_mode=WAL;" | ignore
+  open $db_path | query db "PRAGMA journal_mode=WAL;" | ignore
 
   let _ = (refresh-critter-enrichment-queue)
   let jobs = (queued-critter-evals $limit)
@@ -102,50 +191,87 @@ export def critter-eval-queue [limit: int = 20] {
   if ($jobs | is-empty) {
     { evaluated: 0, message: "queue empty" }
   } else {
-    # Bulk pre-mark all jobs as running in a single UPDATE (N transactions → 1)
+    # Bulk pre-mark all jobs as running in a single UPDATE (1 query db call)
     let started_at = (date now | format date "%Y-%m-%d %H:%M:%S")
     let ids_in = ($jobs | get position_id | each { into string } | str join ", ")
-    $db | query db (["UPDATE position_critter_eval_queue SET status = 'running', started_at = ", (sql-string $started_at), ", last_error = NULL WHERE position_id IN (", $ids_in, ");"] | str join) | ignore
+    open $db_path | query db (["UPDATE position_critter_eval_queue SET status = 'running', started_at = ", (sql-string $started_at), ", last_error = NULL WHERE position_id IN (", $ids_in, ");"] | str join) | ignore
 
-    # Pipe all FENs to a single critter-eval invocation (eliminates N-1 process spawns)
+    # Pipe all FENs to a single critter-eval invocation
     let fens_input = ($jobs | get canonical_fen | str join "\n")
     let raw_output = (try { $fens_input | ^($binary) } catch { "" })
     let output_lines = ($raw_output | lines | where { |line| not ($line | str trim | is-empty) })
+    let finished_at = (date now | format date "%Y-%m-%d %H:%M:%S")
 
-    # Wrap all result writes in one explicit transaction (N×2 transactions → 1 fsync)
-    $db | query db "BEGIN IMMEDIATE;" | ignore
-
-    let evaluated = (
+    # Parse results into lists — no DB calls inside this loop
+    let results = (
       $jobs
       | enumerate
       | each { |item|
           let job = $item.item
           let idx = $item.index
           let position_id = $job.position_id
-          let finished_at = (date now | format date "%Y-%m-%d %H:%M:%S")
 
           if $idx >= ($output_lines | length) {
-            let err_text = "no output from critter-eval for this position"
-            $db | query db (["UPDATE position_critter_eval_queue SET status = 'failed', finished_at = ", (sql-string $finished_at), ", last_error = ", (sql-string $err_text), " WHERE position_id = ", ($position_id | into string), ";"] | str join) | ignore
-            { position_id: $position_id, status: "failed", error: $err_text }
+            { position_id: $position_id, status: "failed", error: "no output from critter-eval for this position", record: null }
           } else {
             try {
               let record = ($output_lines | get $idx | from json)
-              save-critter-eval $db $position_id $record
-              $db | query db (["UPDATE position_critter_eval_queue SET status = 'done', finished_at = ", (sql-string $finished_at), " WHERE position_id = ", ($position_id | into string), ";"] | str join) | ignore
-              { position_id: $position_id, status: "done", final_score: $record.final_score, normalized_fen: $record.normalized_fen }
+              { position_id: $position_id, status: "done", error: null, record: $record }
             } catch { |err|
               let err_text = if ($err | columns | any { |c| $c == "msg" }) { $err.msg } else { $err | to text }
-              $db | query db (["UPDATE position_critter_eval_queue SET status = 'failed', finished_at = ", (sql-string $finished_at), ", last_error = ", (sql-string $err_text), " WHERE position_id = ", ($position_id | into string), ";"] | str join) | ignore
-              { position_id: $position_id, status: "failed", error: $err_text }
+              { position_id: $position_id, status: "failed", error: $err_text, record: null }
             }
           }
         }
     )
 
-    $db | query db "COMMIT;" | ignore
+    let done_results   = ($results | where status == "done")
+    let failed_results = ($results | where status == "failed")
 
-    { evaluated: ($evaluated | length), rows: $evaluated }
+    # Bulk INSERT all successful evals (1 query db call per 400 evals)
+    let eval_stmts = if ($done_results | is-empty) { [] } else {
+      let evals = ($done_results | each { |r| { position_id: $r.position_id, record: $r.record } })
+      bulk-critter-eval-insert-sql $evals $cn $cm $finished_at
+    }
+
+    # Bulk UPDATE done statuses (1 query db call)
+    let done_update = if ($done_results | is-empty) { [] } else {
+      let done_ids = ($done_results | get position_id | each { into string } | str join ", ")
+      [([
+        "UPDATE position_critter_eval_queue SET status = 'done', finished_at = ",
+        (sql-string $finished_at),
+        " WHERE position_id IN (", $done_ids, ");"
+      ] | str join)]
+    }
+
+    # Individual UPDATE per failed position (rare; 1 call each)
+    let failed_updates = ($failed_results | each { |r|
+      [
+        "UPDATE position_critter_eval_queue SET status = 'failed', finished_at = ",
+        (sql-string $finished_at), ", last_error = ", (sql-string $r.error),
+        " WHERE position_id = ", ($r.position_id | into string), ";"
+      ] | str join
+    })
+
+    # Execute all writes in a single run-sql call (BEGIN/COMMIT + for-loop)
+    let all_stmts = ($eval_stmts | append $done_update | append $failed_updates)
+    if not ($all_stmts | is-empty) {
+      run-sql $db_path $all_stmts
+    }
+
+    # Build return rows (same shape as before)
+    let rows = (
+      $results
+      | each { |r|
+          if $r.status == "done" {
+            { position_id: $r.position_id, status: "done", final_score: $r.record.final_score, normalized_fen: $r.record.normalized_fen }
+          } else {
+            { position_id: $r.position_id, status: "failed", error: $r.error }
+          }
+        }
+    )
+
+    { evaluated: ($done_results | length), rows: $rows }
   }
 }
 
