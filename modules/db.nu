@@ -62,3 +62,14 @@ export def init-db [] {
 
   { database: $db_path, schema: $schema_path, status: "initialized" }
 }
+
+export def clean-db [] {
+  let cfg = load-config
+  let db_path = ($cfg.database.path)
+
+  if ($db_path | path exists) {
+    rm $db_path
+  }
+
+  { database: $db_path, status: "removed" }
+}

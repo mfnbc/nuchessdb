@@ -90,19 +90,26 @@ cargo build --release
 # 2. Download and import every chess.com archive for your account
 ./main.nu sync chesscom all <your-username>
 
-# 3. Queue and run critter decomposed evals (most frequent positions first)
+# 3. If you want a fresh retry, clean the DB and chess.com sync state
+./main.nu clean
+
+# 4. Recreate the schema and retry sync from scratch
+./main.nu init
+./main.nu sync chesscom all <your-username>
+
+# 5. Queue and run critter decomposed evals (most frequent positions first)
 ./main.nu critter-enqueue
 ./main.nu critter-eval 50
 
-# 4. Optional: queue and run static engine evals
+# 6. Optional: queue and run static engine evals
 ./main.nu enqueue 100
 ./main.nu eval 20
 
-# 5. Check progress
+# 7. Check progress
 ./main.nu status
 ./main.nu critter-qstats
 
-# 6. Explore opening patterns — classify your most-visited positions
+# 8. Explore opening patterns — classify your most-visited positions
 ./main.nu eco-classify 100
 ```
 
@@ -115,6 +122,8 @@ cargo build --release
 | `init` | Create the SQLite schema |
 | `import <path> [platform]` | Import a local PGN or chess.com JSON export |
 | `sync chesscom [all] <user>` | Download and import chess.com archives |
+| `sync chesscom update <user>` | Retry previously missing chess.com archives |
+| `clean` | Remove the SQLite database |
 | `bench <sync-args...>` | Time a sync run |
 | `status` | Overview: game count, position count, queue depths |
 | `recent [limit]` | Most recently imported games (default 10) |

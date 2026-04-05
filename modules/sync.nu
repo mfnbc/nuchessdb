@@ -33,6 +33,21 @@ def save-sync-state [username: string, state: record] {
   $state
 }
 
+def clear-chesscom-sync-state [username: string] {
+  let state_path = (sync-state-path $username)
+  let raw_dir = $'./data/raw/chesscom/($username)'
+
+  if ($state_path | path exists) {
+    rm $state_path
+  }
+
+  if ($raw_dir | path exists) {
+    rm -r $raw_dir
+  }
+
+  { username: $username, state_removed: $state_path, raw_removed: $raw_dir }
+}
+
 def load-chesscom-archives [username: string] {
   try { http get $'https://api.chess.com/pub/player/($username)/games/archives' } catch {
     print $'sync: chesscom archives unavailable for ($username), skipping'
@@ -183,6 +198,10 @@ def sync-chesscom-update [username: string] {
   }
 }
 
+def clean-chesscom [username: string] {
+  clear-chesscom-sync-state $username
+}
+
 export def sync-games [args: list<string>] {
   if ($args | is-empty) {
     error make { msg: "sync requires a provider and username" }
@@ -201,6 +220,9 @@ export def sync-games [args: list<string>] {
       } else if $mode == "update" {
         print $'sync: chesscom update ($username)'
         { provider: $provider, mode: $mode, username: $username, archives: (sync-chesscom-update $username) }
+      } else if $mode == "clean" {
+        print $'sync: chesscom clean ($username)'
+        { provider: $provider, mode: $mode, username: $username, cleaned: (clean-chesscom $username) }
       } else {
         { provider: $provider, mode: $mode, username: $username, archive: (sync-chesscom-latest $username) }
       }
