@@ -109,6 +109,7 @@ SETUP
 IMPORT & SYNC
   import <path> [platform]    Import a PGN or chess.com JSON export
   sync chesscom [all] <user>  Download and import chess.com archives
+  sync chesscom update <user> Retry previously missing chess.com archives
   bench <sync-args...>        Time a sync run
 
 QUERIES

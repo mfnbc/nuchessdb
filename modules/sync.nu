@@ -33,8 +33,20 @@ def save-sync-state [username: string, state: record] {
   $state
 }
 
+def load-chesscom-archives [username: string] {
+  try { http get $'https://api.chess.com/pub/player/($username)/games/archives' } catch {
+    print $'sync: chesscom archives unavailable for ($username), skipping'
+    null
+  }
+}
+
 def latest-chesscom-archive [username: string] {
-  let archives = (http get $'https://api.chess.com/pub/player/($username)/games/archives')
+  let archives = (load-chesscom-archives $username)
+
+  if $archives == null {
+    return null
+  }
+
   let url = ($archives.archives | last)
 
   if $url == null {
@@ -78,7 +90,12 @@ def sync-chesscom-latest [username: string] {
 }
 
 def sync-chesscom-all [username: string] {
-  let archives = (http get $'https://api.chess.com/pub/player/($username)/games/archives')
+  let archives = (load-chesscom-archives $username)
+
+  if $archives == null {
+    return { username: $username, skipped: [], imported: [], reason: 'archives unavailable' }
+  }
+
   let total = ($archives.archives | length)
   let state = (load-sync-state $username)
   let completed = ($state.completed_archives | default [])
@@ -135,7 +152,7 @@ def sync-chesscom-update [username: string] {
     { username: $username, updated: [], skipped: [] }
   } else {
     let archives = ($missing | each { |archive_id|
-      let parts = ($archive_id | split row '-')
+      let parts = ($archive_id | split row '/')
       if ($parts | length) != 2 {
         { archive_id: $archive_id, skipped: true, reason: 'invalid archive id' }
       } else {
