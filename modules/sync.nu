@@ -20,7 +20,15 @@ def default-sync-state [username: string] {
 def load-sync-state [username: string] {
   let path = (sync-state-path $username)
   if ($path | path exists) {
-    open $path
+    let state = (open $path)
+    {
+      provider: ($state | get -o provider | default 'chesscom')
+      username: ($state | get -o username | default $username)
+      completed_archives: ($state | get -o completed_archives | default [])
+      missing_archives: ($state | get -o missing_archives | default [])
+      current_archive: ($state | get -o current_archive | default null)
+      updated_at: ($state | get -o updated_at | default null)
+    }
   } else {
     default-sync-state $username
   }
