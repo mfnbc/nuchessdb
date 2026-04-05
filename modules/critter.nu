@@ -15,44 +15,82 @@ def chunks-of [chunk_size: int] {
 
 # Build a single VALUES row tuple string for bulk critter-eval INSERT.
 # Returns a string like: (42,'name','model','fen',...)
-def critter-eval-values-row [position_id: int, record: record, cn: string, cm: string, created_at: string] {
+# Schema mirrors critter-eval/src/position.rs PositionRecord
+def critter-eval-values-row [
+    position_id: int,
+    eval_record: record<
+        fen: string,
+        normalized_fen: string,
+        side_to_move: string,
+        phase: int,
+        final_score: int,
+        engine_score: any,        # Option<i64> — null when no engine score provided
+        legal: record<
+            is_legal: bool,
+            is_check: bool,
+            is_checkmate: bool,
+            is_stalemate: bool,
+            is_insufficient_material: bool,
+            legal_move_count: int
+        >,
+        groups: record<
+            material:       record<mg: int, eg: int, blended: int, terms: record>,
+            pawn_structure: record<mg: int, eg: int, blended: int, terms: record>,
+            piece_activity: record<mg: int, eg: int, blended: int, terms: record>,
+            king_safety:    record<mg: int, eg: int, blended: int, terms: record>,
+            passed_pawns:   record<mg: int, eg: int, blended: int, terms: record>,
+            development:    record<mg: int, eg: int, blended: int, terms: record>,
+            scaling:     record<value: int, factor: int>,
+            drawishness: record<value: int, factor: int>,
+            override_:   record<value: int, factor: int>
+        >,
+        checks: record<
+            sum_groups: int,
+            matches_final: bool,
+            delta: any            # Option<i64> — null when no engine score provided
+        >
+    >,
+    cn: string,
+    cm: string,
+    created_at: string
+] {
   [
     "(", ($position_id | into string), ",",
     (sql-string $cn), ",", (sql-string $cm), ",",
-    (sql-string $record.normalized_fen), ",",
-    (sql-int $record.phase), ",",
-    ($record.final_score | into string), ",",
-    (sql-int $record.engine_score), ",",
-    (bool-int $record.legal.is_legal), ",",
-    (bool-int $record.legal.is_check), ",",
-    (bool-int $record.legal.is_checkmate), ",",
-    (bool-int $record.legal.is_stalemate), ",",
-    (bool-int $record.legal.is_insufficient_material), ",",
-    ($record.legal.legal_move_count | into string), ",",
-    (sql-string ($record.groups.material | to json)), ",",
-    (sql-string ($record.groups.pawn_structure | to json)), ",",
-    (sql-string ($record.groups.piece_activity | to json)), ",",
-    (sql-string ($record.groups.king_safety | to json)), ",",
-    (sql-string ($record.groups.passed_pawns | to json)), ",",
-    (sql-string ($record.groups.development | to json)), ",",
-    (sql-int $record.groups.scaling.value), ",",
-    (sql-int $record.groups.scaling.factor), ",",
-    (sql-int $record.groups.drawishness.value), ",",
-    (sql-int $record.groups.drawishness.factor), ",",
-    (sql-int $record.groups.override_.value), ",",
-    (sql-int $record.groups.override_.factor), ",",
-    (sql-int $record.checks.sum_groups), ",",
-    (bool-int $record.checks.matches_final), ",",
-    (sql-int $record.checks.delta), ",",
-    (sql-string ($record | to json)), ",",
+    (sql-string $eval_record.normalized_fen), ",",
+    (sql-int $eval_record.phase), ",",
+    ($eval_record.final_score | into string), ",",
+    (sql-int $eval_record.engine_score), ",",
+    (bool-int $eval_record.legal.is_legal), ",",
+    (bool-int $eval_record.legal.is_check), ",",
+    (bool-int $eval_record.legal.is_checkmate), ",",
+    (bool-int $eval_record.legal.is_stalemate), ",",
+    (bool-int $eval_record.legal.is_insufficient_material), ",",
+    ($eval_record.legal.legal_move_count | into string), ",",
+    (sql-string ($eval_record.groups.material | to json)), ",",
+    (sql-string ($eval_record.groups.pawn_structure | to json)), ",",
+    (sql-string ($eval_record.groups.piece_activity | to json)), ",",
+    (sql-string ($eval_record.groups.king_safety | to json)), ",",
+    (sql-string ($eval_record.groups.passed_pawns | to json)), ",",
+    (sql-string ($eval_record.groups.development | to json)), ",",
+    (sql-int $eval_record.groups.scaling.value), ",",
+    (sql-int $eval_record.groups.scaling.factor), ",",
+    (sql-int $eval_record.groups.drawishness.value), ",",
+    (sql-int $eval_record.groups.drawishness.factor), ",",
+    (sql-int $eval_record.groups.override_.value), ",",
+    (sql-int $eval_record.groups.override_.factor), ",",
+    (sql-int $eval_record.checks.sum_groups), ",",
+    (bool-int $eval_record.checks.matches_final), ",",
+    (sql-int $eval_record.checks.delta), ",",
+    (sql-string ($eval_record | to json)), ",",
     (sql-string $created_at),
     ")"
   ] | str join
 }
 
 # Build a list of bulk INSERT SQL statements (chunked at 400 rows) for critter evals.
-# evals: list of {position_id: int, record: record}
-def bulk-critter-eval-insert-sql [evals: list<record>, cn: string, cm: string, created_at: string] {
+# evals: list of {position_id: int, eval_record: record}
+def bulk-critter-eval-insert-sql [evals: list<record<position_id: int, eval_record: record>>, cn: string, cm: string, created_at: string] {
   let conflict_clause = (
     " ON CONFLICT(position_id, critter_name, critter_model) DO UPDATE SET" +
     " normalized_fen=excluded.normalized_fen, phase=excluded.phase," +
@@ -83,7 +121,7 @@ def bulk-critter-eval-insert-sql [evals: list<record>, cn: string, cm: string, c
     " checks_sum_groups, checks_matches_final, checks_delta, analysis_json, created_at) VALUES "
   )
   $evals | chunks-of 400 | each { |chunk|
-    let values = ($chunk | each { |e| critter-eval-values-row $e.position_id $e.record $cn $cm $created_at } | str join ",")
+    let values = ($chunk | each { |e| critter-eval-values-row $e.position_id $e.eval_record $cn $cm $created_at } | str join ",")
     $header + $values + $conflict_clause
   }
 }
@@ -205,7 +243,7 @@ export def critter-eval-queue [limit: int = 20] {
 
     # Bulk INSERT all successful evals (1 query db call per 400 evals)
     let eval_stmts = if ($done_results | is-empty) { [] } else {
-      let evals = ($done_results | each { |r| { position_id: $r.position_id, record: $r.record } })
+      let evals = ($done_results | each { |r| { position_id: $r.position_id, eval_record: $r.record } })
       bulk-critter-eval-insert-sql $evals $cn $cm $finished_at
     }
 
