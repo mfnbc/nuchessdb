@@ -589,6 +589,30 @@ if $opening != null {
 
 ---
 
+## Performance
+
+The import and enrichment pipeline is designed around a key constraint: **Nushell's `open file.sqlite | query db` opens a new SQLite connection on every call**, so each call is its own transaction and fsync (~10–16 ms). The pipeline minimises the total number of `query db` calls by batching SQL into as few large statements as possible.
+
+### Import (`import` / `sync`)
+
+Positions, accounts, and games are inserted in **Phase 1** using multi-row `INSERT ... VALUES (...), (...), ...` statements, chunked at 400 rows. Phase 2 uses CTE-based bulk INSERTs for `game_positions`, `position_color_stats`, and `position_player_stats` — all JOIN resolution happens inside SQLite, with no ID lookups in Nushell.
+
+Deduplication of positions across a PGN file is done in Rust (`nu_plugin_shakmaty` returns `batch.unique_positions`, a BTreeMap-deduplicated list) so no O(N²) Nushell `reduce` is needed.
+
+Measured throughput: **295 games imported in ~18 seconds** (~1086 `query db` calls total).
+
+### Critter eval (`critter-eval`)
+
+The eval loop pipes all FENs to a single `critter-eval` binary invocation, parses results into a Nushell list (no DB calls in the loop), then writes everything in one `run-sql` call:
+
+- 1 bulk `INSERT INTO position_critter_evals ... VALUES (...), (...)` per 400 evals
+- 1 bulk `UPDATE position_critter_eval_queue ... WHERE position_id IN (...)` for all done jobs
+- 1 `UPDATE` per failed job (rare)
+
+Measured throughput: **100 evals in ~0.47 seconds** (vs ~430 ms just for writes at 20 evals with the per-row approach).
+
+---
+
 ## Related projects
 
 - [`nu_plugin_shakmaty`](../nu_plugin_shakmaty) — Nushell plugin for deterministic chess semantics
