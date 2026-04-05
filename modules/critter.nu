@@ -93,22 +93,27 @@ export def critter-eval-queue [limit: int = 20] {
   let db = (open $cfg.database.path)
   let binary = (critter-binary)
 
+  # WAL mode: reduces write contention, avoids full-db locks on each fsync
+  $db | query db "PRAGMA journal_mode=WAL;" | ignore
+
   let _ = (refresh-critter-enrichment-queue)
   let jobs = (queued-critter-evals $limit)
 
   if ($jobs | is-empty) {
     { evaluated: 0, message: "queue empty" }
   } else {
-    # Mark all jobs as running in one pass
+    # Bulk pre-mark all jobs as running in a single UPDATE (N transactions → 1)
     let started_at = (date now | format date "%Y-%m-%d %H:%M:%S")
-    $jobs | each { |job|
-      $db | query db (["UPDATE position_critter_eval_queue SET status = 'running', started_at = ", (sql-string $started_at), ", last_error = NULL WHERE position_id = ", ($job.position_id | into string), ";"] | str join) | ignore
-    }
+    let ids_in = ($jobs | get position_id | each { into string } | str join ", ")
+    $db | query db (["UPDATE position_critter_eval_queue SET status = 'running', started_at = ", (sql-string $started_at), ", last_error = NULL WHERE position_id IN (", $ids_in, ");"] | str join) | ignore
 
     # Pipe all FENs to a single critter-eval invocation (eliminates N-1 process spawns)
     let fens_input = ($jobs | get canonical_fen | str join "\n")
     let raw_output = (try { $fens_input | ^($binary) } catch { "" })
     let output_lines = ($raw_output | lines | where { |line| not ($line | str trim | is-empty) })
+
+    # Wrap all result writes in one explicit transaction (N×2 transactions → 1 fsync)
+    $db | query db "BEGIN IMMEDIATE;" | ignore
 
     let evaluated = (
       $jobs
@@ -137,6 +142,8 @@ export def critter-eval-queue [limit: int = 20] {
           }
         }
     )
+
+    $db | query db "COMMIT;" | ignore
 
     { evaluated: ($evaluated | length), rows: $evaluated }
   }

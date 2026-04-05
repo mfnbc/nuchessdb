@@ -100,56 +100,20 @@ def position-upsert-sql-by-hash [canonical_hash: string, fen: string] {
 }
 
 def prepare-batch-position-load [rows: list<record>] {
-  let initial_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
-  let start_pos = (position-upsert-sql $initial_fen)
-
-  let acc = (
+  # rows is already a deduplicated list of {zobrist, fen} from the Rust plugin (batch.unique_positions).
+  # Build one INSERT statement per unique position — no deduplication needed here.
+  let statements = (
     $rows
-    | reduce -f {
-        seen: ({ } | upsert $start_pos.canonical_hash { fen: $initial_fen, game_indexes: [], occurrences: 0 })
-        statements: [$start_pos.sql]
-        repeated_rows: 0
-      } { |row, acc|
-        let existing = ($acc.seen | get -o $row.zobrist)
-        if $existing == null {
-          let pos = (position-upsert-sql-by-hash $row.zobrist $row.fen)
-          {
-            seen: ($acc.seen | upsert $row.zobrist { fen: $row.fen, game_indexes: [$row.game_index], occurrences: 1 })
-            statements: ($acc.statements | append $pos.sql)
-            repeated_rows: $acc.repeated_rows
-          }
-        } else {
-          let game_indexes = if ($existing.game_indexes | any { |i| $i == $row.game_index }) { $existing.game_indexes } else { ($existing.game_indexes | append $row.game_index) }
-          {
-            seen: ($acc.seen | upsert $row.zobrist { fen: $existing.fen, game_indexes: $game_indexes, occurrences: ($existing.occurrences + 1) })
-            statements: $acc.statements
-            repeated_rows: ($acc.repeated_rows + 1)
-          }
-        }
-      }
-  )
-
-  let collision_hashes = (
-    $acc.seen
-    | columns
-    | where { |hash| (($acc.seen | get $hash).occurrences > 1) }
-  )
-
-  let collisions = (
-    $collision_hashes
-    | each { |hash|
-        let entry = ($acc.seen | get $hash)
-        { zobrist: $hash, fen: $entry.fen, occurrences: $entry.occurrences, game_indexes: $entry.game_indexes }
-      }
+    | each { |row| (position-upsert-sql-by-hash $row.zobrist $row.fen).sql }
   )
 
   {
-    statements: $acc.statements,
+    statements: $statements,
     summary: {
-      unique_positions: ($acc.seen | columns | length),
-      repeated_positions: ($collisions | length),
-      repeated_rows: $acc.repeated_rows,
-      collision_positions: $collisions,
+      unique_positions: ($rows | length),
+      repeated_positions: 0,
+      repeated_rows: 0,
+      collision_positions: [],
     },
   }
 }
@@ -198,6 +162,13 @@ def color-stats-sql [canonical_hash: string, result: string] {
   ["INSERT INTO position_color_stats (position_id, white_wins, draws, black_wins, occurrences) VALUES ((SELECT id FROM positions WHERE canonical_hash = ", $canonical_hash_q, "), ", ($white | into string), ", ", ($draw | into string), ", ", ($black | into string), ", 1) ON CONFLICT(position_id) DO UPDATE SET white_wins = white_wins + excluded.white_wins, draws = draws + excluded.draws, black_wins = black_wins + excluded.black_wins, occurrences = occurrences + 1;"] | str join
 }
 
+def color-stats-sql-by-id [position_id: int, result: string] {
+  let white = if $result == "1-0" { 1 } else { 0 }
+  let black = if $result == "0-1" { 1 } else { 0 }
+  let draw = if $result == "1/2-1/2" { 1 } else { 0 }
+  ["INSERT INTO position_color_stats (position_id, white_wins, draws, black_wins, occurrences) VALUES (", ($position_id | into string), ", ", ($white | into string), ", ", ($draw | into string), ", ", ($black | into string), ", 1) ON CONFLICT(position_id) DO UPDATE SET white_wins = white_wins + excluded.white_wins, draws = draws + excluded.draws, black_wins = black_wins + excluded.black_wins, occurrences = occurrences + 1;"] | str join
+}
+
 def player-stats-sql [canonical_hash: string, me_username: string, white_username: string, black_username: string, result: string, platform: string] {
   if ($me_username | is-empty) {
     ""
@@ -220,6 +191,24 @@ def player-stats-sql [canonical_hash: string, me_username: string, white_usernam
   }
 }
 
+def player-stats-sql-by-id [position_id: int, account_id: int, me_username: string, white_username: string, black_username: string, result: string] {
+  if ($me_username | is-empty) {
+    ""
+  } else {
+    let me_is_white = ($me_username | str downcase) == ($white_username | str downcase)
+    let me_is_black = ($me_username | str downcase) == ($black_username | str downcase)
+
+    if (not $me_is_white and not $me_is_black) {
+      ""
+    } else {
+      let wins = if (($me_is_white and $result == "1-0") or ($me_is_black and $result == "0-1")) { 1 } else { 0 }
+      let draws = if $result == "1/2-1/2" { 1 } else { 0 }
+      let losses = if (($me_is_white and $result == "0-1") or ($me_is_black and $result == "1-0")) { 1 } else { 0 }
+      ["INSERT INTO position_player_stats (position_id, account_id, wins, draws, losses, occurrences) VALUES (", ($position_id | into string), ", ", ($account_id | into string), ", ", ($wins | into string), ", ", ($draws | into string), ", ", ($losses | into string), ", 1) ON CONFLICT(position_id, account_id) DO UPDATE SET wins = wins + excluded.wins, draws = draws + excluded.draws, losses = losses + excluded.losses, occurrences = occurrences + 1;"] | str join
+    }
+  }
+}
+
 def move-sql [platform: string, source_game_id: string, ply: int, move_san: string, move_uci: string, before_hash: string, after_hash: string, mover_username: string] {
   let mover_id = if ($mover_username | is-empty) {
     "NULL"
@@ -238,55 +227,72 @@ def move-sql [platform: string, source_game_id: string, ply: int, move_san: stri
   ["INSERT INTO game_positions (game_id, ply, move_san, move_uci, position_before_id, position_after_id, mover_account_id) VALUES ((SELECT id FROM games WHERE platform = ", $platform_q, " AND source_game_id = ", $source_q, "), ", ($ply | into string), ", ", $move_san_q, ", ", $move_uci_q, ", (SELECT id FROM positions WHERE canonical_hash = ", $before_q, "), (SELECT id FROM positions WHERE canonical_hash = ", $after_q, "), ", $mover_id, ");"] | str join
 }
 
+def move-sql-by-id [game_id: int, ply: int, move_san: string, move_uci: string, before_id: int, after_id: int, mover_id: string] {
+  let move_san_q = (sql-string $move_san)
+  let move_uci_q = (sql-string $move_uci)
+  ["INSERT INTO game_positions (game_id, ply, move_san, move_uci, position_before_id, position_after_id, mover_account_id) VALUES (", ($game_id | into string), ", ", ($ply | into string), ", ", $move_san_q, ", ", $move_uci_q, ", ", ($before_id | into string), ", ", ($after_id | into string), ", ", $mover_id, ");"] | str join
+}
+
 def build-game-import-statements [platform: string, source_game_id: string, raw_pgn: string, headers: record, cfg: record, rows: list<record>] {
   let result = ($headers | get -o Result | default "*")
   let white = ($headers | get -o White | default "")
   let black = ($headers | get -o Black | default "")
   let me_username = (if $platform == "chesscom" { $cfg.identity.me.chesscom } else if $platform == "lichess" { $cfg.identity.me.lichess } else { "" })
 
-  let sql_parts = [
+  let initial_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+  let initial_hash = ($initial_fen | shakmaty zobrist)
+
+  # Header/account/game SQL
+  let header_stmts = [
     (account-upsert-sql $platform $white ($me_username != "" and ($white | str downcase) == ($me_username | str downcase))),
     (account-upsert-sql $platform $black ($me_username != "" and ($black | str downcase) == ($me_username | str downcase))),
     (game-insert-sql $platform $source_game_id $raw_pgn $headers),
   ]
 
-  let initial_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
-  let initial_hash = ($initial_fen | shakmaty zobrist)
-  let sql_parts = ($sql_parts | append (color-stats-sql $initial_hash $result))
-  let sql_parts = ($sql_parts | append (player-stats-sql $initial_hash $me_username $white $black $result $platform))
+  # Color/player stats for the starting position
+  let init_stmts = [
+    (color-stats-sql $initial_hash $result),
+    (player-stats-sql $initial_hash $me_username $white $black $result $platform),
+  ]
 
-  let replay = ($rows | reduce -f {
-    sql_parts: $sql_parts
-    seen_positions: [$initial_hash]
-    previous_fen: $initial_fen
-    previous_hash: $initial_hash
-  } { |row, acc|
-    let before_hash = $acc.previous_hash
-    let after_hash = $row.zobrist
-    let mover = if $row.color == "white" { $white } else { $black }
-    let before_seen = ($acc.seen_positions | any { |h| $h == $before_hash })
-    let after_seen = ($acc.seen_positions | any { |h| $h == $after_hash })
-    let before_color_sql = if $before_seen { "" } else { (color-stats-sql $before_hash $result) }
-    let before_player_sql = if $before_seen { "" } else { (player-stats-sql $before_hash $me_username $white $black $result $platform) }
-    let after_color_sql = if $after_seen { "" } else { (color-stats-sql $after_hash $result) }
-    let after_player_sql = if $after_seen { "" } else { (player-stats-sql $after_hash $me_username $white $black $result $platform) }
+  # Deduplicate hashes within this game using rows (already processed in Rust) —
+  # extract unique zobrist hashes and emit color/player stats once per unique position.
+  # This avoids any Nushell reduce/record state for deduplication.
+  let unique_hashes = (
+    $rows
+    | get zobrist
+    | uniq
+  )
+  let stats_stmts = (
+    $unique_hashes
+    | each { |hash|
+        [
+          (color-stats-sql $hash $result),
+          (player-stats-sql $hash $me_username $white $black $result $platform),
+        ]
+      }
+    | flatten
+  )
 
-    {
-      sql_parts: (
-        $acc.sql_parts
-        | append $before_color_sql
-        | append $before_player_sql
-        | append $after_color_sql
-        | append $after_player_sql
-        | append (move-sql $platform $source_game_id ($row.ply | into int) $row.san $row.uci $before_hash $after_hash $mover)
-      )
-      seen_positions: ($acc.seen_positions | append $before_hash | append $after_hash)
-      previous_fen: $row.fen
-      previous_hash: $after_hash
-    }
-  })
+  # Move SQL: emit one row per move, threading previous_hash via a simple index scan
+  let hashes = ([$initial_hash] | append ($rows | get zobrist))
+  let move_stmts = (
+    $rows
+    | enumerate
+    | each { |item|
+        let row = $item.item
+        let i = $item.index
+        let before_hash = ($hashes | get $i)
+        let after_hash = $row.zobrist
+        let mover = if $row.color == "white" { $white } else { $black }
+        move-sql $platform $source_game_id ($row.ply | into int) $row.san $row.uci $before_hash $after_hash $mover
+      }
+  )
 
-  let statements = ($replay.sql_parts | where { |stmt| not ($stmt | is-empty) })
+  let statements = (
+    ($header_stmts | append $init_stmts | append $stats_stmts | append $move_stmts)
+    | where { |s| not ($s | is-empty) }
+  )
 
   {
     source_game_id: $source_game_id,
@@ -296,6 +302,117 @@ def build-game-import-statements [platform: string, source_game_id: string, raw_
     moves: ($rows | length),
     statements: $statements,
   }
+}
+
+# Build a single multi-row INSERT for a chunk of position rows.
+# rows: list of {zobrist, fen}  (already deduplicated by Rust plugin)
+def bulk-insert-positions [rows: list<record>] {
+  let values = ($rows | each { |row|
+    let fen = $row.fen
+    let hash = $row.zobrist
+    let parts = ($fen | split row " ")
+    let side     = ($parts | get 1)
+    let castling = ($parts | get 2)
+    let ep       = ($parts | get 3)
+    let halfmove = ($parts | get 4)
+    let fullmove = ($parts | get 5)
+    [
+      "(", (sql-string $hash), ",", (sql-string $fen), ",", (sql-string $fen), ",",
+      (sql-string $side), ",", (sql-string $castling), ",", (sql-string $ep), ",",
+      $halfmove, ",", $fullmove, ",datetime('now'))"
+    ] | str join
+  } | str join ",")
+  [
+    "INSERT INTO positions(canonical_hash,canonical_fen,raw_fen,side_to_move,castling,en_passant,halfmove_clock,fullmove_number,created_at) VALUES ",
+    $values,
+    " ON CONFLICT(canonical_hash) DO UPDATE SET",
+    " canonical_fen=excluded.canonical_fen,raw_fen=excluded.raw_fen,",
+    " side_to_move=excluded.side_to_move,castling=excluded.castling,",
+    " en_passant=excluded.en_passant,halfmove_clock=excluded.halfmove_clock,",
+    " fullmove_number=excluded.fullmove_number"
+  ] | str join
+}
+
+
+# Split a list into non-overlapping chunks of at most chunk_size items.
+# Returns a list of lists.
+def chunks-of [chunk_size: int] {
+  let rows = $in
+  let total = ($rows | length)
+  if $total == 0 { return [] }
+  let num_chunks = (($total + $chunk_size - 1) // $chunk_size)
+  seq 0 ($num_chunks - 1) | each { |i|
+    $rows | skip ($i * $chunk_size) | first $chunk_size
+  }
+}
+
+# Build a single CTE INSERT statement for a chunk of game_positions rows.
+# rows: list of {game_src, ply, san, uci, before_hash, after_hash, mover}
+def cte-insert-game-positions [rows: list<record>, platform_q: string] {
+  let values = ($rows | each { |r|
+    [
+      "(", (sql-string $r.game_src), ",", ($r.ply | into string), ",",
+      (sql-string $r.san), ",", (sql-string $r.uci), ",",
+      (sql-string $r.before_hash), ",", (sql-string $r.after_hash), ",",
+      (sql-string $r.mover), ")"
+    ] | str join
+  } | str join ",")
+  [
+    "WITH m(gs,ply,san,uci,bh,ah,mv) AS (VALUES ", $values,
+    ") INSERT INTO game_positions(game_id,ply,move_san,move_uci,position_before_id,position_after_id,mover_account_id)",
+    " SELECT g.id,m.ply,m.san,m.uci,pb.id,pa.id,a.id",
+    " FROM m",
+    " JOIN games g ON g.platform=", $platform_q, " AND g.source_game_id=m.gs",
+    " JOIN positions pb ON pb.canonical_hash=m.bh",
+    " JOIN positions pa ON pa.canonical_hash=m.ah",
+    " LEFT JOIN accounts a ON a.platform=", $platform_q, " AND a.username=m.mv"
+  ] | str join
+}
+
+# Build a single CTE INSERT statement for a chunk of position_color_stats rows.
+# rows: list of {hash, ww, dr, bw}
+def cte-insert-color-stats [rows: list<record>] {
+  let values = ($rows | each { |r|
+    [
+      "(", (sql-string $r.hash), ",", ($r.ww | into string), ",",
+      ($r.dr | into string), ",", ($r.bw | into string), ")"
+    ] | str join
+  } | str join ",")
+  [
+    "WITH cs(hash,ww,dr,bw) AS (VALUES ", $values,
+    ") INSERT INTO position_color_stats(position_id,white_wins,draws,black_wins,occurrences)",
+    " SELECT p.id,cs.ww,cs.dr,cs.bw,1",
+    " FROM cs JOIN positions p ON p.canonical_hash=cs.hash",
+    " ON CONFLICT(position_id) DO UPDATE SET",
+    " white_wins=white_wins+excluded.white_wins,",
+    " draws=draws+excluded.draws,",
+    " black_wins=black_wins+excluded.black_wins,",
+    " occurrences=occurrences+1"
+  ] | str join
+}
+
+# Build a single CTE INSERT statement for a chunk of position_player_stats rows.
+# rows: list of {hash, wins, draws, losses}
+def cte-insert-player-stats [rows: list<record>, platform_q: string, me_q: string] {
+  let values = ($rows | each { |r|
+    [
+      "(", (sql-string $r.hash), ",", ($r.wins | into string), ",",
+      ($r.draws | into string), ",", ($r.losses | into string), ")"
+    ] | str join
+  } | str join ",")
+  [
+    "WITH ps(hash,wins,draws,losses) AS (VALUES ", $values,
+    ") INSERT INTO position_player_stats(position_id,account_id,wins,draws,losses,occurrences)",
+    " SELECT p.id,a.id,ps.wins,ps.draws,ps.losses,1",
+    " FROM ps",
+    " JOIN positions p ON p.canonical_hash=ps.hash",
+    " JOIN accounts a ON a.platform=", $platform_q, " AND lower(a.username)=lower(", $me_q, ")",
+    " ON CONFLICT(position_id,account_id) DO UPDATE SET",
+    " wins=wins+excluded.wins,",
+    " draws=draws+excluded.draws,",
+    " losses=losses+excluded.losses,",
+    " occurrences=occurrences+1"
+  ] | str join
 }
 
 def normalize-batch-game [game: record] {
@@ -327,7 +444,8 @@ def import-json-games [path: string, platform: string] {
         let raw_pgn = (if ($row | columns | any { |c| $c == "pgn" }) { $row.pgn | into string } else { error make { msg: $'JSON row missing pgn field in ($path)' } })
         let batch = ($raw_pgn | shakmaty pgn-to-batch)
         let normalized_games = ($batch.games | each { |game| normalize-batch-game $game })
-        let prep = (prepare-batch-position-load-with-source $batch.positions $source_game_id)
+        # Use batch.unique_positions (Rust-deduplicated) to avoid O(N²) Nushell reduce
+        let prep = (prepare-batch-position-load-with-source $batch.unique_positions $source_game_id)
         let game_builds = (
           $normalized_games
           | each { |game|
@@ -367,38 +485,134 @@ def import-json-games [path: string, platform: string] {
 
 def import-pgn-file [path: string, platform: string] {
   let cfg = load-config
+  let db_path = $cfg.database.path
   let text = (open $path)
+
+  # --- Phase 1: Parse PGN ---
   let batch = ($text | shakmaty pgn-to-batch)
   let normalized_games = ($batch.games | each { |game| normalize-batch-game $game })
-  let prep = (prepare-batch-position-load-with-source $batch.positions $path)
-  let game_builds = (
+  let me_username = (if $platform == "chesscom" { $cfg.identity.me.chesscom } else if $platform == "lichess" { $cfg.identity.me.lichess } else { "" })
+  let initial_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+  let initial_hash = ($initial_fen | shakmaty zobrist)
+  let platform_q = (sql-string $platform)
+  let chunk_size = 400
+
+  # --- Phase 1 SQL: bulk-insert positions, accounts, games (no subqueries) ---
+  let position_stmts = ($batch.unique_positions | chunks-of $chunk_size | each { |chunk| bulk-insert-positions $chunk })
+  let account_stmts = (
     $normalized_games
     | each { |game|
-        let game_id = $'($path)#($game.game_index)'
-        build-game-import-statements $platform $game_id $text $game.headers $cfg $game.moves
+        let white = ($game.headers | get -o White | default "")
+        let black = ($game.headers | get -o Black | default "")
+        [
+          (account-upsert-sql $platform $white ($me_username != "" and ($white | str downcase) == ($me_username | str downcase))),
+          (account-upsert-sql $platform $black ($me_username != "" and ($black | str downcase) == ($me_username | str downcase))),
+        ]
+      }
+    | flatten
+    | where { |s| not ($s | is-empty) }
+  )
+  let game_stmts = (
+    $normalized_games
+    | each { |game|
+        let source_game_id = $"($path)#($game.game_index)"
+        game-insert-sql $platform $source_game_id $text $game.headers
       }
   )
-  let game_plans = (
-    $game_builds
-    | each { |plan|
-        {
-          source_game_id: $plan.source_game_id,
-          result: $plan.result,
-          white: $plan.white,
-          black: $plan.black,
-          moves: $plan.moves,
-          dedup_summary: $prep.summary,
+  run-sql $db_path ($position_stmts | append $account_stmts | append $game_stmts)
+
+  # --- Phase 2: Collect flat arrays for CTE bulk INSERTs ---
+  #
+  # All JOINs (positions, games, accounts) happen inside SQLite — no ID lookups in Nushell.
+  # Each CTE statement covers up to chunk_size rows to stay within SQLite's compound-select limit.
+
+  # game_positions rows: one per move across all games
+  let all_moves = (
+    $normalized_games
+    | each { |game|
+        let source_game_id = $"($path)#($game.game_index)"
+        let white = ($game.headers | get -o White | default "")
+        let black = ($game.headers | get -o Black | default "")
+        let moves = $game.moves
+        let all_hashes = ([$initial_hash] | append ($moves | get zobrist))
+        $moves | enumerate | each { |item|
+          let row = $item.item
+          {
+            game_src: $source_game_id,
+            ply: ($row.ply | into int),
+            san: $row.san,
+            uci: $row.uci,
+            before_hash: ($all_hashes | get $item.index),
+            after_hash: $row.zobrist,
+            mover: (if $row.color == "white" { $white } else { $black }),
+          }
         }
       }
+    | flatten
   )
-  let game_statements = ($game_builds | each { |plan| $plan.statements } | flatten)
-  let statements = ($prep.statements | append (collision-statements $prep.summary.collision_positions) | append $game_statements)
 
-  if not ($statements | is-empty) {
-    run-sql ($cfg.database.path) $statements
+  # position_color_stats rows: one per (game × unique position in that game)
+  let all_color_rows = (
+    $normalized_games
+    | each { |game|
+        let result = $game.result
+        let ww = if $result == "1-0" { 1 } else { 0 }
+        let bw = if $result == "0-1" { 1 } else { 0 }
+        let dr = if $result == "1/2-1/2" { 1 } else { 0 }
+        let hashes = ([$initial_hash] | append ($game.moves | get zobrist) | uniq)
+        $hashes | each { |hash| { hash: $hash, ww: $ww, dr: $dr, bw: $bw } }
+      }
+    | flatten
+  )
+
+  # position_player_stats rows: one per (game × unique position), only when me is a player
+  let all_player_rows = if ($me_username | is-empty) {
+    []
+  } else {
+    (
+      $normalized_games
+      | each { |game|
+          let result = $game.result
+          let white = ($game.headers | get -o White | default "")
+          let black = ($game.headers | get -o Black | default "")
+          let me_is_white = ($me_username | str downcase) == ($white | str downcase)
+          let me_is_black = ($me_username | str downcase) == ($black | str downcase)
+          if (not $me_is_white and not $me_is_black) {
+            []
+          } else {
+            let wins = if (($me_is_white and $result == "1-0") or ($me_is_black and $result == "0-1")) { 1 } else { 0 }
+            let draws = if $result == "1/2-1/2" { 1 } else { 0 }
+            let losses = if (($me_is_white and $result == "0-1") or ($me_is_black and $result == "1-0")) { 1 } else { 0 }
+            let hashes = ([$initial_hash] | append ($game.moves | get zobrist) | uniq)
+            $hashes | each { |hash| { hash: $hash, wins: $wins, draws: $draws, losses: $losses } }
+          }
+        }
+      | flatten
+    )
   }
 
-  $game_plans
+  # --- Phase 2 SQL: chunked CTE INSERTs (JOINs resolved inside SQLite) ---
+  let move_stmts = ($all_moves | chunks-of $chunk_size | each { |chunk| cte-insert-game-positions $chunk $platform_q })
+  let color_stmts = ($all_color_rows | chunks-of $chunk_size | each { |chunk| cte-insert-color-stats $chunk })
+  let player_stmts = if ($all_player_rows | is-empty) { [] } else {
+    let me_q = (sql-string $me_username)
+    $all_player_rows | chunks-of $chunk_size | each { |chunk| cte-insert-player-stats $chunk $platform_q $me_q }
+  }
+
+  run-sql $db_path ($move_stmts | append $color_stmts | append $player_stmts)
+
+  # --- Return summary ---
+  $normalized_games
+  | each { |game|
+      {
+        source_game_id: $"($path)#($game.game_index)",
+        result: $game.result,
+        white: ($game.headers | get -o White | default ""),
+        black: ($game.headers | get -o Black | default ""),
+        moves: ($game.moves | length),
+        dedup_summary: null,
+      }
+    }
 }
 
 export def import-games [args: list<string>] {
