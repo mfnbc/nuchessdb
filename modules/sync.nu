@@ -137,7 +137,6 @@ def sync-chesscom-all [username: string] {
   let total = ($archives.archives | length)
   let state = (load-sync-state $username)
   let completed = ($state.completed_archives | default [])
-  let missing = ($state.missing_archives | default [])
 
   $archives.archives
   | enumerate
@@ -155,9 +154,11 @@ def sync-chesscom-all [username: string] {
         save-sync-state $username $next_state | ignore
         let saved = (save-archive-pgn $username $archive_url)
         if $saved == null {
+          let current_state = (load-sync-state $username)
+          let current_missing = ($current_state.missing_archives | default [])
           let skipped_state = (
-            $next_state
-            | upsert missing_archives ($missing | append $archive_id | uniq)
+            $current_state
+            | upsert missing_archives ($current_missing | append $archive_id | uniq)
             | upsert current_archive null
             | upsert updated_at (date now)
           )
@@ -166,10 +167,13 @@ def sync-chesscom-all [username: string] {
           { archive_url: $archive_url, archive_id: $archive_id, skipped: true, reason: 'no pgn found' }
         } else {
           let imported = (import-games [$saved.file "chesscom"])
-          let remaining_missing = ($missing | where { |a| $a != $archive_id })
+          let current_state = (load-sync-state $username)
+          let current_completed = ($current_state.completed_archives | default [])
+          let current_missing = ($current_state.missing_archives | default [])
+          let remaining_missing = ($current_missing | where { |a| $a != $archive_id })
           let finished_state = (
-            $next_state
-            | upsert completed_archives ($completed | append $archive_id | uniq)
+            $current_state
+            | upsert completed_archives ($current_completed | append $archive_id | uniq)
             | upsert missing_archives $remaining_missing
             | upsert current_archive null
             | upsert updated_at (date now)
