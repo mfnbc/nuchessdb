@@ -2,6 +2,20 @@
 
 A Nushell-first chess database and enrichment pipeline. Import games from chess.com or lichess, replay them into canonical positions, and layer deterministic evaluation, decomposed critter scores, and dynamic move analysis on top — all queryable directly from Nushell.
 
+## Vision
+
+- Keep the first release simple: a local SQLite database you can query and script against.
+- Turn chess data into self-help: reports, queries, and `.nuon` intermediates that explain patterns in your own games.
+- Use decomposed evals, vector similarity, and ELO-graded models to move from raw scores to learnable chess concepts.
+- Pair the data layer with chess-tui and later AI commentary so the project can act like a CLI SCID for understanding, not just storage.
+
+## Goals
+
+- Queryable local chess database, not a black-box insight service.
+- Progressive reports that build from facts to patterns to training signals.
+- Nu-native data flow with `.nuon` state and minimal text conversion.
+- Support future tooling for opening theory, positional pattern search, and level-appropriate commentary.
+
 ## How it works
 
 - Nushell orchestrates everything.
