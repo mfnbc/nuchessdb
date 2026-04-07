@@ -34,12 +34,14 @@ def critter-eval-values-row [
             legal_move_count: int
         >,
         groups: record<
-            material:       record<mg: int, eg: int, blended: int, terms: record>,
-            pawn_structure: record<mg: int, eg: int, blended: int, terms: record>,
-            piece_activity: record<mg: int, eg: int, blended: int, terms: record>,
-            king_safety:    record<mg: int, eg: int, blended: int, terms: record>,
-            passed_pawns:   record<mg: int, eg: int, blended: int, terms: record>,
-            development:    record<mg: int, eg: int, blended: int, terms: record>,
+            material:        record<mg: int, eg: int, blended: int, terms: record>,
+            pawn_structure:  record<mg: int, eg: int, blended: int, terms: record>,
+            piece_activity:  record<mg: int, eg: int, blended: int, terms: record>,
+            king_safety:     record<mg: int, eg: int, blended: int, terms: record>,
+            passed_pawns:    record<mg: int, eg: int, blended: int, terms: record>,
+            development:     record<mg: int, eg: int, blended: int, terms: record>,
+            vector_features: record<mg: int, eg: int, blended: int, terms: record>,
+            strategic:       record<mg: int, eg: int, blended: int, terms: record>,
             scaling:     record<value: int, factor: int>,
             drawishness: record<value: int, factor: int>,
             override_:   record<value: int, factor: int>
@@ -131,28 +133,6 @@ def critter-config [] {
   $cfg.enrichment.critter
 }
 
-def critter-binary [] {
-  let ccfg = critter-config
-  let configured = ($ccfg.binary | default "")
-  if ($configured | is-empty) == false and ($configured | path exists) {
-    $configured
-  } else {
-    let release = "../critter-eval/target/release/critter-eval"
-    let debug = "../critter-eval/target/debug/critter-eval"
-    if ($release | path exists) {
-      $release
-    } else if ($debug | path exists) {
-      $debug
-    } else if ($configured | is-empty) == false {
-      $configured
-    } else {
-      error make {
-        msg: "critter-eval binary is not configured in config/nuchessdb.nuon and was not found at ../critter-eval/target/{release,debug}/critter-eval"
-      }
-    }
-  }
-}
-
 def critter-name [] {
   let ccfg = critter-config
   ($ccfg.name | default "critter-eval")
@@ -180,15 +160,17 @@ def critter-fixture-record [fen: string] {
       legal_move_count: 1
     }
     groups: {
-      material: { mg: 0, eg: 0, blended: 0, terms: {} }
-      pawn_structure: { mg: 0, eg: 0, blended: 0, terms: {} }
-      piece_activity: { mg: 0, eg: 0, blended: 0, terms: {} }
-      king_safety: { mg: 0, eg: 0, blended: 0, terms: {} }
-      passed_pawns: { mg: 0, eg: 0, blended: 0, terms: {} }
-      development: { mg: 0, eg: 0, blended: 0, terms: {} }
-      scaling: { value: 0, factor: 1 }
+      material:        { mg: 0, eg: 0, blended: 0, terms: {} }
+      pawn_structure:  { mg: 0, eg: 0, blended: 0, terms: {} }
+      piece_activity:  { mg: 0, eg: 0, blended: 0, terms: {} }
+      king_safety:     { mg: 0, eg: 0, blended: 0, terms: {} }
+      passed_pawns:    { mg: 0, eg: 0, blended: 0, terms: {} }
+      development:     { mg: 0, eg: 0, blended: 0, terms: {} }
+      vector_features: { mg: 0, eg: 0, blended: 0, terms: {} }
+      strategic:       { mg: 0, eg: 0, blended: 0, terms: {} }
+      scaling:     { value: 0, factor: 1 }
       drawishness: { value: 0, factor: 1 }
-      override_: { value: 0, factor: 1 }
+      override_:   { value: 0, factor: 1 }
     }
     checks: { sum_groups: 0, matches_final: true, delta: null }
   }
@@ -222,7 +204,6 @@ export def critter-queue-stats [] {
 export def critter-eval-queue [limit: int = 20] {
   let cfg = load-config
   let db_path = $cfg.database.path
-  let binary = (critter-binary)
   let cn = (critter-name)
   let cm = (critter-model)
   let fixture_mode = ($env | get -o NUCHESSDB_TEST_CRITTER_MODE | default "")
@@ -243,35 +224,22 @@ export def critter-eval-queue [limit: int = 20] {
 
     let finished_at = (date now | format date "%Y-%m-%d %H:%M:%S")
 
-    # Parse results into lists — no DB calls inside this loop
+    # Evaluate each FEN via the chessdb critter-eval plugin command
     let results = if $fixture_mode == "fixture" {
       $jobs | each { |job|
         { position_id: $job.position_id, status: "done", error: null, record: (critter-fixture-record $job.canonical_fen) }
       }
     } else {
-      let fens_input = ($jobs | get canonical_fen | str join "\n")
-      let raw_output = (try { $fens_input | ^($binary) } catch { "" })
-      let output_lines = ($raw_output | lines | where { |line| not ($line | str trim | is-empty) })
-
-      $jobs
-      | enumerate
-      | each { |item|
-          let job = $item.item
-          let idx = $item.index
-          let position_id = $job.position_id
-
-          if $idx >= ($output_lines | length) {
-            { position_id: $position_id, status: "failed", error: "no output from critter-eval for this position", record: null }
-          } else {
-            try {
-              let record = ($output_lines | get $idx | from json)
-              { position_id: $position_id, status: "done", error: null, record: $record }
-            } catch { |err|
-              let err_text = if ($err | columns | any { |c| $c == "msg" }) { $err.msg } else { $err | to text }
-              { position_id: $position_id, status: "failed", error: $err_text, record: null }
-            }
-          }
+      $jobs | each { |job|
+        let position_id = $job.position_id
+        try {
+          let record = ($job.canonical_fen | chessdb critter-eval)
+          { position_id: $position_id, status: "done", error: null, record: $record }
+        } catch { |err|
+          let err_text = if ($err | columns | any { |c| $c == "msg" }) { $err.msg } else { $err | to text }
+          { position_id: $position_id, status: "failed", error: $err_text, record: null }
         }
+      }
     }
 
     let done_results   = ($results | where status == "done")

@@ -38,7 +38,7 @@ def engine-best-move-san [fen: string, uci: any] {
   if ($uci == null or ($uci | is-empty)) {
     null
   } else {
-    $fen | shakmaty uci-to-san $uci
+    $fen | chessdb uci-to-san $uci
   }
 }
 

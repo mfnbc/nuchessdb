@@ -44,8 +44,7 @@
 
 ## Tooling
 
-- Use `nu_plugin_shakmaty` for deterministic chess semantics.
-- Use `critter-eval` for decomposed evaluation enrichment.
+- Use `nu_plugin_chessdb` for deterministic chess semantics, decomposed evaluation, and NNUE inference.
 - Use engine-specific model profiles for dynamic move analysis.
   - Use LLM tooling for commentary and enrichment (planned).
 - Keep analysis reproducible where possible.

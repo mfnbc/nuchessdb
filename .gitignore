@@ -1,2 +1,4 @@
 data/*.sqlite
 data/raw/
+nu_plugin_chessdb/target/
+tmp/

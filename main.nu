@@ -1,6 +1,6 @@
 #!/usr/bin/env nu
 
-plugin use shakmaty
+plugin use chessdb
 
 use ./modules/cli.nu *
 

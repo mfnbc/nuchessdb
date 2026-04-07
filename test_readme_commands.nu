@@ -1,3 +1,5 @@
+plugin use chessdb
+
 use ./modules/config.nu *
 use ./modules/db.nu *
 use ./modules/sync.nu *

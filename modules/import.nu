@@ -55,7 +55,7 @@ def account-upsert-sql [platform: string, username: string, is_me: bool] {
 
 def position-upsert-sql [fen: string] {
   let canonical_fen = $fen
-  let canonical_hash = ($canonical_fen | shakmaty zobrist)
+  let canonical_hash = ($canonical_fen | chessdb zobrist)
   let side = ($canonical_fen | split row " " | get 1)
   let castling = ($canonical_fen | split row " " | get 2)
   let ep = ($canonical_fen | split row " " | get 3)
@@ -240,7 +240,7 @@ def build-game-import-statements [platform: string, source_game_id: string, raw_
   let me_username = (if $platform == "chesscom" { $cfg.identity.me.chesscom } else if $platform == "lichess" { $cfg.identity.me.lichess } else { "" })
 
   let initial_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
-  let initial_hash = ($initial_fen | shakmaty zobrist)
+  let initial_hash = ($initial_fen | chessdb zobrist)
 
   # Header/account/game SQL
   let header_stmts = [
@@ -442,7 +442,7 @@ def import-json-games [path: string, platform: string] {
         let idx = ($acc.index | into string)
         let source_game_id = (if ($row | columns | any { |c| $c == "id" }) { $row.id | into string } else if ($row | columns | any { |c| $c == "url" }) { $row.url | into string } else { $'($path)#($idx)' })
         let raw_pgn = (if ($row | columns | any { |c| $c == "pgn" }) { $row.pgn | into string } else { error make { msg: $'JSON row missing pgn field in ($path)' } })
-        let batch = ($raw_pgn | shakmaty pgn-to-batch)
+        let batch = ($raw_pgn | chessdb pgn-to-batch)
         let normalized_games = ($batch.games | each { |game| normalize-batch-game $game })
         # Use batch.unique_positions (Rust-deduplicated) to avoid O(N²) Nushell reduce
         let prep = (prepare-batch-position-load-with-source $batch.unique_positions $source_game_id)
@@ -489,11 +489,11 @@ def import-pgn-file [path: string, platform: string] {
   let text = (open $path)
 
   # --- Phase 1: Parse PGN ---
-  let batch = ($text | shakmaty pgn-to-batch)
+  let batch = ($text | chessdb pgn-to-batch)
   let normalized_games = ($batch.games | each { |game| normalize-batch-game $game })
   let me_username = (if $platform == "chesscom" { $cfg.identity.me.chesscom } else if $platform == "lichess" { $cfg.identity.me.lichess } else { "" })
   let initial_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
-  let initial_hash = ($initial_fen | shakmaty zobrist)
+  let initial_hash = ($initial_fen | chessdb zobrist)
   let platform_q = (sql-string $platform)
   let chunk_size = 400
 

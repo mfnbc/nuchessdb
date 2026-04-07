@@ -7,6 +7,7 @@ use ./engine.nu *
 use ./critter.nu *
 use ./dynamic.nu *
 use ./eco.nu *
+use ./reports.nu *
 
 def benchmark-sync [args: list<string>] {
   let started = (date now)
@@ -92,6 +93,10 @@ export def run [args: list<string>] {
       let limit = if ($rest | is-empty) { 20 } else { $rest | get 0 | into int }
       position-report $limit | eco-classify | to nuon | print
     }
+    "report-generate" => {
+      let phase = if ($rest | is-empty) { 1 } else { $rest | get 0 | into int }
+      generate-reports $phase | to nuon | print
+    }
     "bench" => { benchmark-sync $rest | to nuon | print }
     "qstats" => { queue-stats | to nuon | print }
     "help" => { print "nuchessdb — Nushell chess database and enrichment pipeline
@@ -135,7 +140,11 @@ DYNAMIC EVAL (engine move ladder)
   dynamic-eval [limit]        Run dynamic eval on queued positions  (default 20)
 
 OPENINGS (ECO classification)
-  eco-classify [limit]        Top positions with ECO opening names  (default 20)" }
+  eco-classify [limit]        Top positions with ECO opening names  (default 20)
+
+REPORTS
+  report-generate [phase]     Generate player reports (default phase=1)
+                              Phase 1: color-performance, rating-bands, time-control" }
     _ => { print $'unknown command: ($command)' }
   }
 }

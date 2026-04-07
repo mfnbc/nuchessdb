@@ -1,0 +1,18 @@
+[package]
+name = "nu_plugin_chessdb"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "nu_plugin_chessdb"
+path = "src/main.rs"
+
+[dependencies]
+nu-plugin = "0.111"
+nu-protocol = "0.111"
+
+shakmaty = "0.26"
+pgn-reader = "0.24"
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

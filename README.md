@@ -20,38 +20,29 @@ A Nushell-first chess database and enrichment pipeline. Import games from chess.
 
 - Nushell orchestrates everything.
 - SQLite stores games, positions, stats, and evaluation results.
-- `nu_plugin_shakmaty` handles deterministic chess semantics (FEN, moves, hashing).
-- `critter-eval` provides decomposed Open Critter evaluation per position.
+- `nu_plugin_chessdb` handles all chess semantics: FEN parsing, move application, hashing, decomposed critter-style evaluation, and NNUE inference — all in-process via a single Nushell plugin.
 - A UCI engine (e.g. Stockfish, lc0) can add static or dynamic move analysis.
 
 ---
 
 ## Prerequisites
 
-### 1. Build and install `nu_plugin_shakmaty`
+### 1. Build and install `nu_plugin_chessdb`
 
 ```sh
-cd ../nu_plugin_shakmaty
+cd nu_plugin_chessdb
 cargo build --release
 ```
 
 Inside Nushell:
 
 ```nu
-plugin add /full/path/to/nu_plugin_shakmaty/target/release/nu_plugin_shakmaty
+plugin add /full/path/to/nuchessdb/nu_plugin_chessdb/target/release/nu_plugin_chessdb
 ```
 
-Then restart Nushell (or start a new session) for the plugin to be active.
+Then restart Nushell (or start a new session) for the plugin to be active. All chess commands are available under the `chessdb` prefix.
 
-### 2. Build `critter-eval`
-
-```sh
-cd ../critter-eval
-cargo build --release
-# binary: target/release/critter-eval
-```
-
-### 3. Configure `config/nuchessdb.nuon`
+### 2. Configure `config/nuchessdb.nuon`
 
 ```nuon
 {
@@ -67,7 +58,7 @@ cargo build --release
   }
   enrichment: {
     critter: {
-      binary: "../critter-eval/target/release/critter-eval"   # leave "" for auto-discovery
+      # binary: not used — critter eval runs in-process via nu_plugin_chessdb
       name:   "critter-eval"
       model:  ""
     }
@@ -639,17 +630,19 @@ The import and enrichment pipeline is designed around a key constraint: **Nushel
 
 Positions, accounts, and games are inserted in **Phase 1** using multi-row `INSERT ... VALUES (...), (...), ...` statements, chunked at 400 rows. Phase 2 uses CTE-based bulk INSERTs for `game_positions`, `position_color_stats`, and `position_player_stats` — all JOIN resolution happens inside SQLite, with no ID lookups in Nushell.
 
-Deduplication of positions across a PGN file is done in Rust (`nu_plugin_shakmaty` returns `batch.unique_positions`, a BTreeMap-deduplicated list) so no O(N²) Nushell `reduce` is needed.
+Deduplication of positions across a PGN file is done in Rust (`nu_plugin_chessdb` returns `batch.unique_positions`, a BTreeMap-deduplicated list) so no O(N²) Nushell `reduce` is needed.
 
 Measured throughput: **295 games imported in ~18 seconds** (~1086 `query db` calls total).
 
 ### Critter eval (`critter-eval`)
 
-The eval loop pipes all FENs to a single `critter-eval` binary invocation, parses results into a Nushell list (no DB calls in the loop), then writes everything in one `run-sql` call:
+Evaluation runs in-process via `nu_plugin_chessdb` — no subprocess or binary invocation. The loop evaluates each FEN by calling `chessdb critter-eval`, accumulates results in a Nushell list (no DB calls in the loop), then writes everything in one `run-sql` call:
 
 - 1 bulk `INSERT INTO position_critter_evals ... VALUES (...), (...)` per 400 evals
 - 1 bulk `UPDATE position_critter_eval_queue ... WHERE position_id IN (...)` for all done jobs
 - 1 `UPDATE` per failed job (rare)
+
+Each eval record includes eight named groups (`material`, `pawn_structure`, `piece_activity`, `king_safety`, `passed_pawns`, `development`, `vector_features`, `strategic`) plus scalar modifiers (`scaling`, `drawishness`, `override_`) and an internal consistency check (`checks.sum_groups`).
 
 Measured throughput: **100 evals in ~0.47 seconds** (vs ~430 ms just for writes at 20 evals with the per-row approach).
 
@@ -657,6 +650,5 @@ Measured throughput: **100 evals in ~0.47 seconds** (vs ~430 ms just for writes 
 
 ## Related projects
 
-- [`nu_plugin_shakmaty`](../nu_plugin_shakmaty) — Nushell plugin for deterministic chess semantics
-- [`critter-eval`](../critter-eval) — decomposed Open Critter evaluation backend
-- [`open-critter`](../open-critter) — Open Critter engine source (Pascal, UCI)
+- [`nu_plugin_chessdb`](./nu_plugin_chessdb) — Nushell plugin bundling all chess semantics and evaluation (chess moves, FEN, hashing, critter-style eval, NNUE inference)
+- [`open-critter`](../open-critter) — Open Critter engine source (Pascal, UCI); used as an evaluation reference
