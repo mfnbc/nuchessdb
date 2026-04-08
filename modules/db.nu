@@ -39,11 +39,28 @@ export def run-sql [db_path: string, statements: list<string>] {
   }
 }
 
+# Verify that data/eco.json is present; error with recovery instructions if not.
+def ensure-eco-data [] {
+  let eco_path = "./data/eco.json"
+  if not ($eco_path | path exists) {
+    error make {
+      msg: (
+        "data/eco.json is missing.\n" +
+        "It ships with the repository — restore it with:\n" +
+        "  git checkout -- data/eco.json\n" +
+        "Or re-clone the repository."
+      )
+    }
+  }
+}
+
 export def init-db [] {
   let cfg = load-config
   let db_path = ($cfg.database.path)
   let schema_path = ($cfg.database.schema)
   let db_dir = ($db_path | path dirname)
+
+  ensure-eco-data
 
   mkdir $db_dir
   ensure-sqlite-file $db_path
@@ -60,7 +77,7 @@ export def init-db [] {
     run-sql $db_path ["ALTER TABLE games ADD COLUMN black_elo INTEGER;"]
   }
 
-  { database: $db_path, schema: $schema_path, status: "initialized" }
+  { database: $db_path, schema: $schema_path, status: "initialized", eco_data: "ok" }
 }
 
 export def clean-db [] {

@@ -43,10 +43,11 @@ In-process Nu objects replace all NDJSON line protocol.
 - Returns `{score_cp, score_pawns, weights_path, config}` record
 - Tested with `default_hybrid.weights` (starting position → ~93 cp)
 
-### Step 7 — Bootstrap ECO data locally
+### Step 7 ✅ — Bootstrap ECO data locally
 
-- `init` should check whether `eco.json` is already present as a git checkout
-- If not, clone it into a gitignored location inside this project so setup remains self-contained
+- `eco.json` ships with the repository (499 ECO entries, `data/eco.json`)
+- `init-db` now calls `ensure-eco-data` which validates the file is present before proceeding
+- If missing, errors with recovery instructions: `git checkout -- data/eco.json`
 
 ### Step 8 — Player introspection reports
 
@@ -84,10 +85,15 @@ Each phase builds on the previous phase's cached results.
 
 Each phase's `.nuon` files are transient intermediates — cheap to regenerate, useful for downstream reports, and don't pollute the DB.
 
-### Step 9 — AI query primer
+### Step 9 ✅ — AI query primer
 
-- Add `docs/query-primer.md` as a compact schema + query-pattern guide for an AI that wants to ask good questions about gameplay
-- Keep it focused on the tables, relationships, and gotchas needed to write its own SQL
+- `docs/query-primer.md` — compact schema + query-pattern guide for an AI writing gameplay SQL
+- Covers: DB connection, all table schemas, key conventions (is_me filter, color determination,
+  result notation, position identity, FEN matching, JSON eval columns, time-control parsing)
+- Common query patterns: win rate, position stats, critter eval joins, opponent record,
+  position history, move frequency
+- Gotchas section: NULL ELOs, NULL time_control, position_id vs canonical_hash,
+  multi-platform is_me, occurrences semantics, final_score sign, ply 0
 
 ---
 
