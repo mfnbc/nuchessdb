@@ -208,7 +208,7 @@ impl PluginCommand for NnueEval {
     }
 
     fn signature(&self) -> Signature {
-        Signature::build("chessdb nnue-eval")
+        Signature::build(self.name())
             .input_output_types(vec![(Type::String, Type::record())])
             .required_named(
                 "weights",
@@ -216,7 +216,7 @@ impl PluginCommand for NnueEval {
                 "path to the .weights file (JSON format from chess-vector-engine)",
                 Some('w'),
             )
-            .category(Category::Custom("chessdb".into()))
+            .category(Category::Custom(crate::PLUGIN_CATEGORY.into()))
     }
 
     fn run(
@@ -236,9 +236,6 @@ impl PluginCommand for NnueEval {
             PipelineData::Value(v, _) => v
                 .coerce_string()
                 .map_err(|e| LabeledError::new(format!("expected string input (FEN): {}", e)))?,
-            PipelineData::Empty => {
-                return Err(LabeledError::new("expected FEN string as pipeline input"));
-            }
             _ => {
                 return Err(LabeledError::new("expected FEN string as pipeline input"));
             }
@@ -249,39 +246,7 @@ impl PluginCommand for NnueEval {
 
         // Convert serde_json::Value to nu Value
         let span = call.head;
-        let nu_val = json_to_nu_value(&result, span);
+        let nu_val = crate::utils::json_to_nu_value(result, span);
         Ok(PipelineData::Value(nu_val, None))
-    }
-}
-
-fn json_to_nu_value(v: &serde_json::Value, span: nu_protocol::Span) -> Value {
-    match v {
-        serde_json::Value::Object(map) => {
-            let cols: Vec<String> = map.keys().cloned().collect();
-            let vals: Vec<Value> = cols
-                .iter()
-                .map(|k| json_to_nu_value(&map[k], span))
-                .collect();
-            Value::record(
-                nu_protocol::Record::from_iter(cols.into_iter().zip(vals)),
-                span,
-            )
-        }
-        serde_json::Value::String(s) => Value::string(s.clone(), span),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Value::int(i, span)
-            } else if let Some(f) = n.as_f64() {
-                Value::float(f, span)
-            } else {
-                Value::string(n.to_string(), span)
-            }
-        }
-        serde_json::Value::Bool(b) => Value::bool(*b, span),
-        serde_json::Value::Array(arr) => {
-            let vals: Vec<Value> = arr.iter().map(|x| json_to_nu_value(x, span)).collect();
-            Value::list(vals, span)
-        }
-        serde_json::Value::Null => Value::nothing(span),
     }
 }

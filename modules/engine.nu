@@ -57,14 +57,14 @@ def parse-engine-output [text: string] {
       $acc | upsert best_move_uci ($parts | get 1? | default null)
     } else if ($line | str contains " score cp ") {
       let parsed = ($line | parse --regex 'score cp (?<cp>-?\d+)')
-      if (($parsed | is-empty) == false) {
+      if not ($parsed | is-empty) {
         $acc | upsert centipawn (($parsed | get 0).cp | into int)
       } else {
         $acc
       }
     } else if ($line | str contains " score mate ") {
       let parsed = ($line | parse --regex 'score mate (?<mate>-?\d+)')
-      if (($parsed | is-empty) == false) {
+      if not ($parsed | is-empty) {
         $acc | upsert mate (($parsed | get 0).mate | into int)
       } else {
         $acc

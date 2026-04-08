@@ -123,7 +123,7 @@ impl PluginCommand for PgnToFens {
                 Type::String,
                 Type::List(Box::new(Type::Record(vec![].into()))),
             )])
-            .category(Category::Custom("chess".into()))
+            .category(Category::Custom(crate::PLUGIN_CATEGORY.into()))
     }
 
     fn run(
@@ -154,7 +154,7 @@ impl PluginCommand for PgnToBatch {
     fn signature(&self) -> Signature {
         Signature::build(self.name())
             .input_output_types(vec![(Type::String, Type::Record(vec![].into()))])
-            .category(Category::Custom("chess".into()))
+            .category(Category::Custom(crate::PLUGIN_CATEGORY.into()))
     }
 
     fn run(

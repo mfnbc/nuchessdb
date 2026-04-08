@@ -58,7 +58,7 @@ if ($qstats_rows | is-empty) {
 }
 
 let eval_result = (eval-queue 10)
-if $eval_result.evaluated < 0 {
+if $eval_result.evaluated <= 0 {
   error make { msg: 'eval command returned invalid result' }
 }
 
@@ -77,7 +77,7 @@ if ($critter_qstats_rows | is-empty) {
 }
 
 let critter_eval_result = (critter-eval-queue 10)
-if $critter_eval_result.evaluated < 0 {
+if $critter_eval_result.evaluated <= 0 {
   error make { msg: 'critter-eval command returned invalid result' }
 }
 
@@ -93,7 +93,7 @@ if ($dynamic_qstats_rows | is-empty) {
 }
 
 let dynamic_eval_result = (dynamic-eval-queue 10)
-if $dynamic_eval_result.evaluated < 0 {
+if $dynamic_eval_result.evaluated <= 0 {
   error make { msg: 'dynamic-eval command returned invalid result' }
 }
 

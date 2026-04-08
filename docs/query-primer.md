@@ -110,7 +110,7 @@ For "how do I do at this position" queries, always use `position_player_stats` j
 | `passed_pawns_json` | passed pawns |
 | `development_json` | development |
 
-Each JSON object has the shape `{"mg": N, "eg": N, "blended": N}` (all integers, centipawns).
+Each JSON object has the shape `{"mg": N, "eg": N, "blended": N, "terms": {...}}` (mg/eg/blended are integers in centipawns; `terms` is an object of named sub-scores that make up the group total — keys vary per group).
 
 `vector_features` and `strategic` groups are only available inside `analysis_json` — they are not broken out into dedicated columns.
 
@@ -130,7 +130,7 @@ CAST(json_extract(piece_activity_json, '$.blended') AS INTEGER) AS activity_blen
 CASE
   WHEN CAST(SUBSTR(time_control, 1, INSTR(time_control||'+', '+')-1) AS INTEGER) < 180  THEN 'bullet'
   WHEN CAST(SUBSTR(time_control, 1, INSTR(time_control||'+', '+')-1) AS INTEGER) < 600  THEN 'blitz'
-  WHEN CAST(SUBSTR(time_control, 1, INSTR(time_control||'+', '+')-1) AS INTEGER) < 1800 THEN 'rapid'
+  WHEN CAST(SUBSTR(time_control, 1, INSTR(time_control||'+', '+')-1) AS INTEGER) < 3600 THEN 'rapid'
   WHEN CAST(SUBSTR(time_control, 1, INSTR(time_control||'+', '+')-1) AS INTEGER) >= 1800 THEN 'classical'
   ELSE 'unknown'
 END

@@ -110,6 +110,9 @@ fn play_and_serialize(pos: Chess, mv: &shakmaty::Move) -> Result<String, Labeled
     Ok(Fen::from_position(new_pos, EnPassantMode::Legal).to_string())
 }
 
+// Returns "white" or "black" for the side to move.
+// Note: the `positions` table stores side_to_move as 'w'/'b' (single char);
+// this string is used only in the plugin's JSON output, not in SQL.
 fn side_to_move_string(pos: &Chess) -> String {
     match pos.turn() {
         Color::White => "white",

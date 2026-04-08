@@ -17,7 +17,7 @@ impl PluginCommand for EncodeFen {
     fn signature(&self) -> Signature {
         Signature::build(self.name())
             .input_output_types(vec![(Type::String, Type::List(Box::new(Type::Float)))])
-            .category(Category::Custom("chess".into()))
+            .category(Category::Custom(crate::PLUGIN_CATEGORY.into()))
     }
 
     fn run(

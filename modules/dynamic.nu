@@ -117,8 +117,8 @@ def parse-dynamic-output [text: string] {
         let rank = if ($rank_res | is-empty) { null } else { (($rank_res | get 0).rank | into int) }
         let cp_res = ($left | parse --regex 'score cp (?<score>-?\d+)')
         let mate_res = ($left | parse --regex 'score mate (?<score>-?\d+)')
-        let score = if ($cp_res | is-empty) == false { ($cp_res | get 0).score | into int } else { null }
-        let mate = if ($mate_res | is-empty) == false { ($mate_res | get 0).score | into int } else { null }
+        let score = if not ($cp_res | is-empty) { ($cp_res | get 0).score | into int } else { null }
+        let mate = if not ($mate_res | is-empty) { ($mate_res | get 0).score | into int } else { null }
 
         if $rank == null {
           null

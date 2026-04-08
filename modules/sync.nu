@@ -83,7 +83,7 @@ export def clean-sync-cache [] {
     rm -r $raw_dir
   }
 
-  if ($progress_files | is-empty) == false {
+  if not ($progress_files | is-empty) {
     $progress_files | each { |path| rm $path }
   }
 
@@ -93,7 +93,7 @@ export def clean-sync-cache [] {
 def load-chesscom-archives [username: string] {
   let fixture = ($env | get -o NUCHESSDB_TEST_ARCHIVES_JSON | default "")
 
-  if ($fixture | is-empty) == false {
+  if not ($fixture | is-empty) {
     open $fixture
   } else {
     try { http get $'https://api.chess.com/pub/player/($username)/games/archives' } catch {

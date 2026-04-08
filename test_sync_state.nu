@@ -19,7 +19,7 @@ if $retried_missing != ['2024/04'] {
   error make { msg: $'unexpected missing after retry: ($retried_missing)' }
 }
 
-if ($retried_completed | any { |m| $m == '2024/02' }) == false {
+if not ($retried_completed | any { |m| $m == '2024/02' }) {
   error make { msg: 'retry did not add recovered month to completed_archives' }
 }
 

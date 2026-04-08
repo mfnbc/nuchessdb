@@ -1,7 +1,5 @@
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
-use nu_protocol::{
-    Category, LabeledError, PipelineData, Record, Signature, SyntaxShape, Type, Value,
-};
+use nu_protocol::{Category, LabeledError, PipelineData, Signature, SyntaxShape, Type};
 
 pub struct CritterEval;
 
@@ -25,7 +23,7 @@ impl PluginCommand for CritterEval {
                 "Optional engine centipawn score to compare against",
                 Some('e'),
             )
-            .category(Category::Custom("chess".into()))
+            .category(Category::Custom(crate::PLUGIN_CATEGORY.into()))
     }
 
     fn run(
@@ -48,35 +46,9 @@ impl PluginCommand for CritterEval {
             LabeledError::new(e.to_string()).with_label("serialization error", span)
         })?;
 
-        Ok(PipelineData::Value(json_to_nu_value(json_val, span), None))
-    }
-}
-
-/// Recursively convert a serde_json::Value into a nu_protocol::Value.
-fn json_to_nu_value(val: serde_json::Value, span: nu_protocol::Span) -> Value {
-    match val {
-        serde_json::Value::Null => Value::nothing(span),
-        serde_json::Value::Bool(b) => Value::bool(b, span),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Value::int(i, span)
-            } else if let Some(f) = n.as_f64() {
-                Value::float(f, span)
-            } else {
-                Value::string(n.to_string(), span)
-            }
-        }
-        serde_json::Value::String(s) => Value::string(s, span),
-        serde_json::Value::Array(arr) => {
-            let items: Vec<Value> = arr.into_iter().map(|v| json_to_nu_value(v, span)).collect();
-            Value::list(items, span)
-        }
-        serde_json::Value::Object(obj) => {
-            let mut rec = Record::new();
-            for (k, v) in obj {
-                rec.push(k, json_to_nu_value(v, span));
-            }
-            Value::record(rec, span)
-        }
+        Ok(PipelineData::Value(
+            crate::utils::json_to_nu_value(json_val, span),
+            None,
+        ))
     }
 }

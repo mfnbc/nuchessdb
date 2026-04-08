@@ -40,11 +40,11 @@ if ($rated_rows | is-empty) {
   error make { msg: 'rated replacement query returned no rows' }
 }
 
-if ($opponents_rows | columns | any { |c| $c == 'opponent' }) == false {
+if not ($opponents_rows | columns | any { |c| $c == 'opponent' }) {
   error make { msg: 'opponents replacement query missing opponent column' }
 }
 
-if ($rated_rows | columns | any { |c| $c == 'win_pct' }) == false {
+if not ($rated_rows | columns | any { |c| $c == 'win_pct' }) {
   error make { msg: 'rated replacement query missing win_pct column' }
 }
 

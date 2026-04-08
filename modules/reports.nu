@@ -362,13 +362,36 @@ export def generate-opening-repertoire [limit: int = 20] {
 }
 
 # ---------------------------------------------------------------------------
-# Phase 2 — Report 5: Frequent losses
+# Phase 2 — Reports 5 & 6: Frequent losses / wins (shared implementation)
 # ---------------------------------------------------------------------------
 
-# Generate frequent-losses.md — positions where you lose most often.
-# Uses a minimum occurrence threshold to filter noise.
-# Writes reports/frequent-losses.md and reports/.cache/loss-positions.nuon.
-export def generate-frequent-losses [min_occurrences: int = 2, limit: int = 20] {
+# Shared engine for generate-frequent-losses and generate-frequent-wins.
+# outcome_col  — "losses" or "wins" (the column to sort and filter by)
+# primary_pct  — "loss_pct" or "win_pct" (the primary percentage column)
+# secondary_pct — "win_pct" or "loss_pct" (the secondary percentage column)
+# report_file  — filename under reports/
+# cache_file   — filename under reports/.cache/
+# heading      — markdown heading (e.g. "Frequent Loss Positions")
+# rank_line    — description line after heading
+# section_head — ## sub-heading inside the report
+# table_header — markdown table header row
+# table_sep    — markdown table separator row
+# row_fmt      — closure that formats one enriched row into a markdown table row string
+def generate-frequent-outcome [
+  min_occurrences: int,
+  limit: int,
+  outcome_col: string,
+  primary_pct: string,
+  secondary_pct: string,
+  report_file: string,
+  cache_file: string,
+  heading: string,
+  rank_line: string,
+  section_head: string,
+  table_header: string,
+  table_sep: string,
+  row_fmt: closure,
+] {
   let cfg = load-config
   let db = $cfg.database.path
   ensure-dirs
@@ -377,104 +400,77 @@ export def generate-frequent-losses [min_occurrences: int = 2, limit: int = 20] 
   let lim     = ($limit | into string)
   let rows = (open $db | query db ([
     "SELECT p.canonical_fen, ps.wins AS me_wins, ps.draws AS me_draws, ps.losses AS me_losses, ps.occurrences AS me_occurrences,",
-    " ROUND(100.0 * ps.losses / ps.occurrences, 1) AS loss_pct,",
-    " ROUND(100.0 * ps.wins / ps.occurrences, 1) AS win_pct",
+    $" ROUND\(100.0 * ps.losses / ps.occurrences, 1\) AS loss_pct,",
+    $" ROUND\(100.0 * ps.wins / ps.occurrences, 1\) AS win_pct",
     " FROM position_player_stats ps",
     " JOIN positions p ON p.id = ps.position_id",
     " JOIN accounts a  ON a.id = ps.account_id AND a.is_me = 1",
-    " WHERE ps.occurrences >= ", $min_occ, " AND ps.losses > 0",
-    " ORDER BY ps.losses DESC, loss_pct DESC",
-    " LIMIT ", $lim
+    $" WHERE ps.occurrences >= ($min_occ) AND ps.($outcome_col) > 0",
+    $" ORDER BY ps.($outcome_col) DESC, ($primary_pct) DESC",
+    $" LIMIT ($lim)"
   ] | str join))
 
-  let report_path = $"(reports-dir)/frequent-losses.md"
-  let cache_path  = $"(cache-dir)/loss-positions.nuon"
+  let report_path = $"(reports-dir)/($report_file)"
+  let cache_path  = $"(cache-dir)/($cache_file)"
   let generated   = (date now | format date "%Y-%m-%d %H:%M:%S")
 
   if ($rows | is-empty) {
-    ["# Frequent Loss Positions", "", $"_No positions found with >= ($min_occurrences) occurrences and at least one loss._", ""] | str join "\n" | save --force $report_path
+    [$"# ($heading)", "", $"_No positions found with >= ($min_occurrences) occurrences and at least one ($outcome_col | str replace -a 's' '' | str trim)._", ""] | str join "\n" | save --force $report_path
     return { status: "no-data", path: $report_path }
   }
 
   let enriched = ($rows | eco-classify)
-
   $enriched | to nuon | save --force $cache_path
 
-  let table_header = "| Opening | ECO | Occurrences | Losses | Loss% | Wins | Win% |"
-  let table_sep    = "|---------|-----|-------------|--------|-------|------|------|"
-  let table_rows = ($enriched | each { |r|
-    let name = if ($r.opening_name | is-empty) { "_Unknown_" } else { $r.opening_name }
-    let eco  = if ($r.eco_code    | is-empty) { "—"         } else { $r.eco_code }
-    $"| ($name) | ($eco) | ($r.me_occurrences) | ($r.me_losses) | ($r.loss_pct)% | ($r.me_wins) | ($r.win_pct)% |"
-  })
+  let table_rows = ($enriched | each $row_fmt)
 
   [
-    "# Frequent Loss Positions", "",
+    $"# ($heading)", "",
     $"_Generated ($generated) — positions with >= ($min_occurrences) occurrences_", "",
-    "Positions ranked by number of losses, then loss rate.", "",
-    "## Positions Where You Lose Most", "",
+    $rank_line, "",
+    $"## ($section_head)", "",
     $table_header, $table_sep,
   ] | append $table_rows | append [""] | str join "\n" | save --force $report_path
 
   { status: "ok", path: $report_path, positions: ($enriched | length) }
 }
 
-# ---------------------------------------------------------------------------
-# Phase 2 — Report 6: Frequent wins
-# ---------------------------------------------------------------------------
+# Generate frequent-losses.md — positions where you lose most often.
+# Uses a minimum occurrence threshold to filter noise.
+# Writes reports/frequent-losses.md and reports/.cache/loss-positions.nuon.
+export def generate-frequent-losses [min_occurrences: int = 2, limit: int = 20] {
+  generate-frequent-outcome $min_occurrences $limit
+    "losses" "loss_pct" "win_pct"
+    "frequent-losses.md" "loss-positions.nuon"
+    "Frequent Loss Positions"
+    "Positions ranked by number of losses, then loss rate."
+    "Positions Where You Lose Most"
+    "| Opening | ECO | Occurrences | Losses | Loss% | Wins | Win% |"
+    "|---------|-----|-------------|--------|-------|------|------|"
+    { |r|
+      let name = if ($r.opening_name | is-empty) { "_Unknown_" } else { $r.opening_name }
+      let eco  = if ($r.eco_code    | is-empty) { "—"         } else { $r.eco_code }
+      $"| ($name) | ($eco) | ($r.me_occurrences) | ($r.me_losses) | ($r.loss_pct)% | ($r.me_wins) | ($r.win_pct)% |"
+    }
+}
 
 # Generate frequent-wins.md — positions where you win most reliably.
 # Uses a minimum occurrence threshold to filter noise.
 # Writes reports/frequent-wins.md and reports/.cache/win-positions.nuon.
 export def generate-frequent-wins [min_occurrences: int = 2, limit: int = 20] {
-  let cfg = load-config
-  let db = $cfg.database.path
-  ensure-dirs
-
-  let min_occ = ($min_occurrences | into string)
-  let lim     = ($limit | into string)
-  let rows = (open $db | query db ([
-    "SELECT p.canonical_fen, ps.wins AS me_wins, ps.draws AS me_draws, ps.losses AS me_losses, ps.occurrences AS me_occurrences,",
-    " ROUND(100.0 * ps.wins / ps.occurrences, 1) AS win_pct,",
-    " ROUND(100.0 * ps.losses / ps.occurrences, 1) AS loss_pct",
-    " FROM position_player_stats ps",
-    " JOIN positions p ON p.id = ps.position_id",
-    " JOIN accounts a  ON a.id = ps.account_id AND a.is_me = 1",
-    " WHERE ps.occurrences >= ", $min_occ, " AND ps.wins > 0",
-    " ORDER BY ps.wins DESC, win_pct DESC",
-    " LIMIT ", $lim
-  ] | str join))
-
-  let report_path = $"(reports-dir)/frequent-wins.md"
-  let cache_path  = $"(cache-dir)/win-positions.nuon"
-  let generated   = (date now | format date "%Y-%m-%d %H:%M:%S")
-
-  if ($rows | is-empty) {
-    ["# Frequent Win Positions", "", $"_No positions found with >= ($min_occurrences) occurrences and at least one win._", ""] | str join "\n" | save --force $report_path
-    return { status: "no-data", path: $report_path }
-  }
-
-  let enriched = ($rows | eco-classify)
-
-  $enriched | to nuon | save --force $cache_path
-
-  let table_header = "| Opening | ECO | Occurrences | Wins | Win% | Losses | Loss% |"
-  let table_sep    = "|---------|-----|-------------|------|------|--------|-------|"
-  let table_rows = ($enriched | each { |r|
-    let name = if ($r.opening_name | is-empty) { "_Unknown_" } else { $r.opening_name }
-    let eco  = if ($r.eco_code    | is-empty) { "—"         } else { $r.eco_code }
-    $"| ($name) | ($eco) | ($r.me_occurrences) | ($r.me_wins) | ($r.win_pct)% | ($r.me_losses) | ($r.loss_pct)% |"
-  })
-
-  [
-    "# Frequent Win Positions", "",
-    $"_Generated ($generated) — positions with >= ($min_occurrences) occurrences_", "",
-    "Positions ranked by number of wins, then win rate.", "",
-    "## Positions Where You Win Most", "",
-    $table_header, $table_sep,
-  ] | append $table_rows | append [""] | str join "\n" | save --force $report_path
-
-  { status: "ok", path: $report_path, positions: ($enriched | length) }
+  generate-frequent-outcome $min_occurrences $limit
+    "wins" "win_pct" "loss_pct"
+    "frequent-wins.md" "win-positions.nuon"
+    "Frequent Win Positions"
+    "Positions ranked by number of wins, then win rate."
+    "Positions Where You Win Most"
+    "| Opening | ECO | Occurrences | Wins | Win% | Losses | Loss% |"
+    "|---------|-----|-------------|------|------|--------|-------|"
+    { |r|
+      let name = if ($r.opening_name | is-empty) { "_Unknown_" } else { $r.opening_name }
+      let eco  = if ($r.eco_code    | is-empty) { "—"         } else { $r.eco_code }
+      $"| ($name) | ($eco) | ($r.me_occurrences) | ($r.me_wins) | ($r.win_pct)% | ($r.me_losses) | ($r.loss_pct)% |"
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -515,9 +511,9 @@ def axis-summary [col: string, labels: list<string>, classified: list<record>] {
     let wins   = if ($grp | is-empty) { 0 } else { $grp | get me_wins | math sum }
     let draws  = if ($grp | is-empty) { 0 } else { $grp | get me_draws | math sum }
     let losses = if ($grp | is-empty) { 0 } else { $grp | get me_losses | math sum }
-    let wp = if $games > 0 { ($wins * 100.0 / $games | math round) } else { 0 }
-    let dp = if $games > 0 { ($draws * 100.0 / $games | math round) } else { 0 }
-    let lp = if $games > 0 { ($losses * 100.0 / $games | math round) } else { 0 }
+    let wp = if $games > 0 { ($wins * 100.0 / $games | math round --precision 1) } else { 0.0 }
+    let dp = if $games > 0 { ($draws * 100.0 / $games | math round --precision 1) } else { 0.0 }
+    let lp = if $games > 0 { ($losses * 100.0 / $games | math round --precision 1) } else { 0.0 }
     { category: $lbl, positions: ($grp | length), games: $games, wins: $wins, draws: $draws, losses: $losses, win_pct: $wp, draw_pct: $dp, loss_pct: $lp }
   }
 }

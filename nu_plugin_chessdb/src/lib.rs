@@ -17,9 +17,13 @@ pub mod pgn_to_fens;
 pub mod position_encoder;
 pub mod san_to_uci;
 pub mod uci_to_san;
+pub mod utils;
 pub mod zobrist;
 
 use nu_plugin::Plugin;
+
+/// Shared help-category string for all `chessdb *` plugin commands.
+pub const PLUGIN_CATEGORY: &str = "chess";
 
 pub struct ChessdbPlugin;
 

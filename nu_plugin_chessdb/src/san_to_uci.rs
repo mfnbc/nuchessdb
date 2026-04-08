@@ -18,7 +18,7 @@ impl PluginCommand for SanToUci {
         Signature::build(self.name())
             .required("san", SyntaxShape::String, "SAN move to convert")
             .input_output_types(vec![(Type::String, Type::String)])
-            .category(Category::Custom("chess".into()))
+            .category(Category::Custom(crate::PLUGIN_CATEGORY.into()))
     }
 
     fn run(

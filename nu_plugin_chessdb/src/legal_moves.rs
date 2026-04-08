@@ -20,7 +20,7 @@ impl PluginCommand for LegalMoves {
                 Type::String,
                 Type::List(Box::new(Type::Record(vec![].into()))),
             )])
-            .category(Category::Custom("chess".into()))
+            .category(Category::Custom(crate::PLUGIN_CATEGORY.into()))
     }
 
     fn run(

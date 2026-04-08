@@ -41,7 +41,7 @@ $env.NUCHESSDB_TEST_PGN_MODE = 'fixture-ready'
 let update_result = (sync-games ['chesscom' 'update' 'hikaru'])
 let state_after_update = (sync-chesscom-status 'hikaru')
 
-if ($state_after_update.missing_archives | is-empty) == false {
+if not ($state_after_update.missing_archives | is-empty) {
   error make { msg: $'expected no missing archives after update: ($state_after_update.missing_archives)' }
 }
 
@@ -68,7 +68,7 @@ if $eval_result.evaluated <= 0 {
   error make { msg: 'expected critter eval jobs to be processed' }
 }
 
-if ($queue_after | is-empty) == false {
+if not ($queue_after | is-empty) {
   error make { msg: 'expected critter queue to be drained by eval' }
 }
 

@@ -53,28 +53,6 @@ def account-upsert-sql [platform: string, username: string, is_me: bool] {
   }
 }
 
-def position-upsert-sql [fen: string] {
-  let canonical_fen = $fen
-  let canonical_hash = ($canonical_fen | chessdb zobrist)
-  let side = ($canonical_fen | split row " " | get 1)
-  let castling = ($canonical_fen | split row " " | get 2)
-  let ep = ($canonical_fen | split row " " | get 3)
-  let halfmove = ($canonical_fen | split row " " | get 4)
-  let fullmove = ($canonical_fen | split row " " | get 5)
-  let canonical_hash_q = (sql-string $canonical_hash)
-  let canonical_fen_q = (sql-string $canonical_fen)
-  let raw_q = (sql-string $fen)
-  let side_q = (sql-string $side)
-  let castling_q = (sql-string $castling)
-  let ep_q = (sql-string $ep)
-
-  {
-    canonical_hash: $canonical_hash,
-    canonical_fen: $canonical_fen,
-    sql: (["INSERT INTO positions (canonical_hash, canonical_fen, raw_fen, side_to_move, castling, en_passant, halfmove_clock, fullmove_number, created_at) VALUES (", $canonical_hash_q, ", ", $canonical_fen_q, ", ", $raw_q, ", ", $side_q, ", ", $castling_q, ", ", $ep_q, ", ", ($halfmove | into string), ", ", ($fullmove | into string), ", datetime('now')) ON CONFLICT(canonical_hash) DO UPDATE SET canonical_fen = excluded.canonical_fen, raw_fen = excluded.raw_fen, side_to_move = excluded.side_to_move, castling = excluded.castling, en_passant = excluded.en_passant, halfmove_clock = excluded.halfmove_clock, fullmove_number = excluded.fullmove_number;"] | str join)
-  }
-}
-
 def position-upsert-sql-by-hash [canonical_hash: string, fen: string] {
   let canonical_fen = $fen
   let side = ($canonical_fen | split row " " | get 1)
@@ -331,19 +309,6 @@ def bulk-insert-positions [rows: list<record>] {
     " en_passant=excluded.en_passant,halfmove_clock=excluded.halfmove_clock,",
     " fullmove_number=excluded.fullmove_number"
   ] | str join
-}
-
-
-# Split a list into non-overlapping chunks of at most chunk_size items.
-# Returns a list of lists.
-def chunks-of [chunk_size: int] {
-  let rows = $in
-  let total = ($rows | length)
-  if $total == 0 { return [] }
-  let num_chunks = (($total + $chunk_size - 1) // $chunk_size)
-  seq 0 ($num_chunks - 1) | each { |i|
-    $rows | skip ($i * $chunk_size) | first $chunk_size
-  }
 }
 
 # Build a single CTE INSERT statement for a chunk of game_positions rows.

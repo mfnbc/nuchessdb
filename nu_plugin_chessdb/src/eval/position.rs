@@ -109,6 +109,10 @@ fn compute_phase(board: &shakmaty::Board) -> u8 {
 fn material_score(board: &shakmaty::Board, phase: u8) -> GroupValue {
     let stage = i64::from(phase);
     let opening = 32_i64;
+    // Phase-dependent material adjustment coefficients, indexed by game phase (0..=32).
+    // Each row: [unused0, unused1, unused2, unused3, unused4, bishop_pair, np_bonus, rp_penalty,
+    //            bn_vs_rp, redundant_r, redundant_qr]
+    // Columns 0–4 are legacy placeholders retained for index stability; they are never read.
     let coeff = [
         [0_i64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         [2964, 1515, 899, 864, 293, 117, 12, 1, 14, 81, 40],
@@ -476,6 +480,8 @@ fn passed_pawn_score(
     (score, terms)
 }
 
+// _phase is kept for potential future phase-dependent king safety tuning but is
+// not currently used inside this function.
 fn king_safety_score(board: &shakmaty::Board, color: Color, in_check: bool, _phase: u8) -> i64 {
     let king_sq = match board.king_of(color) {
         Some(sq) => sq,

@@ -71,7 +71,8 @@ Then restart Nushell (or start a new session) for the plugin to be active. All c
     engine: {
       binary:      "/path/to/stockfish"   # for static evals
       name:        "stockfish"
-      model:       ""
+      model:       ""   # reserved for engine-specific model path (e.g. lc0 .pb); not used by chessdb nnue-eval (which uses its own bundled weights)
+      # threads, hash_mb, nodes: present but not currently passed to UCI process
       threads:     1
       hash_mb:     128
       depth:       12
@@ -134,8 +135,6 @@ Then restart Nushell (or start a new session) for the plugin to be active. All c
 | `recent [limit]` | Most recently imported games (default 10) |
 | `top [limit]` | Most-visited positions (default 20) |
 | `report [limit]` | Positions with outcome stats (default 20) |
-| `opponents [limit]` | Most-played opponents (default 20) |
-| `rated [limit]` | Opponents sorted by rating (default 50) |
 | `enqueue [limit]` | Queue hot positions for engine eval (default 50) |
 | `queue [limit]` | Show pending engine eval queue (default 50) |
 | `qstats` | Engine eval queue statistics |

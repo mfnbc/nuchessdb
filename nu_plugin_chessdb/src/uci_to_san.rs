@@ -18,7 +18,7 @@ impl PluginCommand for UciToSan {
         Signature::build(self.name())
             .required("uci", SyntaxShape::String, "UCI move to convert")
             .input_output_types(vec![(Type::String, Type::String)])
-            .category(Category::Custom("chess".into()))
+            .category(Category::Custom(crate::PLUGIN_CATEGORY.into()))
     }
 
     fn run(

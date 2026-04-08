@@ -64,7 +64,7 @@ for f in $expected_files {
 # ---------------------------------------------------------------------------
 # opening-repertoire.md must be "ok" — fixture has positions
 # ---------------------------------------------------------------------------
-let opening_report = ($result.reports | get 0)
+let opening_report = ($result.reports | where { |r| $r.path | str contains "opening-repertoire" } | get 0)
 if $opening_report.status != "ok" {
   error make { msg: $"opening-repertoire expected status ok, got ($opening_report.status)" }
 }
@@ -108,7 +108,7 @@ if not ($opening_md | str contains "| Opening |") {
 # frequent-losses: fixture games are all wins, so no-data is expected
 # (default min_occurrences=2, no losses in fixture)
 # ---------------------------------------------------------------------------
-let loss_report = ($result.reports | get 1)
+let loss_report = ($result.reports | where { |r| $r.path | str contains "frequent-losses" } | get 0)
 # status is either no-data (no losses) or ok (if there are losses)
 if $loss_report.status != "ok" and $loss_report.status != "no-data" {
   error make { msg: $"frequent-losses unexpected status: ($loss_report.status)" }
@@ -118,7 +118,7 @@ if $loss_report.status != "ok" and $loss_report.status != "no-data" {
 # frequent-wins: fixture games are all wins; min_occurrences=2, 4 games loaded
 # so this should be "ok"
 # ---------------------------------------------------------------------------
-let win_report = ($result.reports | get 2)
+let win_report = ($result.reports | where { |r| $r.path | str contains "frequent-wins" } | get 0)
 if $win_report.status != "ok" {
   error make { msg: $"frequent-wins expected status ok, got ($win_report.status)" }
 }

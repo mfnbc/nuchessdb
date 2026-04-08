@@ -11,7 +11,8 @@
   }
   enrichment: {
     critter: {
-      binary: "./test-fixtures/bin/critter-stub.sh"
+      # binary is unused — critter eval runs in-process via the Rust plugin (chessdb critter-eval).
+      # binary: "./test-fixtures/bin/critter-stub.sh"
       name: "critter-eval"
       model: "fixture"
     }
@@ -25,13 +26,16 @@
       binary: ""
       name: "stockfish"
       model: ""
-      threads: 1
-      hash_mb: 128
+      # threads, hash_mb, and nodes are not currently passed to the UCI process.
+      # threads: 1
+      # hash_mb: 128
+      # nodes: 0
       depth: 12
-      nodes: 0
       movetime_ms: 0
     }
-    llm_model: ""
-    prompt_version: ""
+    # llm_model and prompt_version are reserved for future LLM-assisted annotation.
+    # No module currently reads these fields.
+    # llm_model: ""
+    # prompt_version: ""
   }
 }

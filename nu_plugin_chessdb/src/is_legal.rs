@@ -18,7 +18,7 @@ impl PluginCommand for IsLegal {
         Signature::build(self.name())
             .required("move", SyntaxShape::String, "SAN or UCI move to test")
             .input_output_types(vec![(Type::String, Type::Bool)])
-            .category(Category::Custom("chess".into()))
+            .category(Category::Custom(crate::PLUGIN_CATEGORY.into()))
     }
 
     fn run(

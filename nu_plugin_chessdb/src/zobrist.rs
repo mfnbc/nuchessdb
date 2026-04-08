@@ -1,9 +1,5 @@
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
 use nu_protocol::{Category, LabeledError, PipelineData, Signature, Type, Value};
-use shakmaty::{
-    zobrist::{Zobrist64, ZobristHash},
-    EnPassantMode,
-};
 
 pub struct Zobrist;
 
@@ -22,7 +18,7 @@ impl PluginCommand for Zobrist {
         Signature::build(self.name())
             .switch("int", "Output as integer instead of hex", Some('i'))
             .input_output_types(vec![(Type::String, Type::String)])
-            .category(Category::Custom("chess".into()))
+            .category(Category::Custom(crate::PLUGIN_CATEGORY.into()))
     }
 
     fn run(
@@ -35,16 +31,7 @@ impl PluginCommand for Zobrist {
         let fen_str = input.into_value(call.head)?.as_str()?.to_string();
         let as_int = call.has_flag("int")?;
 
-        let pos = crate::chess::fen_to_chess(&fen_str, call.head)?;
-
-        let hash: Zobrist64 = pos.zobrist_hash(EnPassantMode::Legal);
-        let hash_value: u64 = hash.0;
-
-        let result = if as_int {
-            hash_value.to_string()
-        } else {
-            format!("{:016x}", hash_value)
-        };
+        let result = crate::core::zobrist(&fen_str, as_int, call.head)?;
 
         Ok(PipelineData::Value(Value::string(result, call.head), None))
     }
