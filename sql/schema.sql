@@ -243,7 +243,7 @@ CREATE TABLE IF NOT EXISTS position_enrichment_queue (
 -- These prevent full table scans when joining from positions into the eval/run tables.
 CREATE INDEX IF NOT EXISTS idx_position_engine_evals_position_id    ON position_engine_evals(position_id);
 CREATE INDEX IF NOT EXISTS idx_position_critter_evals_position_id   ON position_critter_evals(position_id);
-CREATE INDEX IF NOT EXISTS idx_position_dynamic_runs_position_id    ON position_dynamic_runs(position_id);
+CREATE INDEX IF NOT EXISTS idx_position_dynamic_runs_position_zobrist ON position_dynamic_runs(position_zobrist);
 CREATE INDEX IF NOT EXISTS idx_game_positions_game_id               ON game_positions(game_id);
 CREATE INDEX IF NOT EXISTS idx_game_positions_position_before_id    ON game_positions(position_before_id);
 CREATE INDEX IF NOT EXISTS idx_game_positions_position_after_id     ON game_positions(position_after_id);
