@@ -1,4 +1,4 @@
-#!/usr/bin/env nu
+#!/home/michael/.cargo/bin/nu
 
 plugin use chessdb
 

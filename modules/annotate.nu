@@ -109,8 +109,14 @@ export def review-game [game_id: int, corpus_path: string = "corpus.msgpack"] {
             # 3. Construct prompt
             let prompt = (build-coach-prompt $move $culprit $neighbors)
             
-            # 4. Call LLM
-            let comment = $"[Coach] Your ($culprit.key) shifted significantly. In similar positions ($neighbors | get -o metadata.opening | str join ', '), players usually focus on structural integrity."
+            # 4. Call LLM (using nu-agent consult if available, else fallback)
+            let comment = (if (which consult | is-not-empty) {
+                # Pipe prompt to LLM agent
+                $prompt | consult --model "gemini-3-flash" --system "You are a Grandmaster Chess Coach. Be concise."
+            } else {
+                # Fallback template
+                $"[Coach] Your ($culprit.key) shifted significantly ($move.deltas | get $culprit.key | into string) cp. In similar positions ($neighbors | get -o metadata.opening | default ['unknown'] | str join ', '), players usually focus on structural integrity."
+            })
 
             # 5. Save to annotations table
             let sql = [
@@ -128,6 +134,21 @@ export def review-game [game_id: int, corpus_path: string = "corpus.msgpack"] {
 }
 
 def build-coach-prompt [move, culprit, neighbors] {
-    # Stub for actual prompt construction
-    $"Move: ($move.move). Culprit: ($culprit.key). Neighbors: ($neighbors | length)"
+    let neighbor_ctx = if ($neighbors | is-empty) {
+        "No similar games found in your history."
+    } else {
+        let n_list = ($neighbors | each { |n| $"- ($n.metadata.opening) (Eval: ($n.metadata.score))" } | str join "\n")
+        $"Similar structural themes in your history:\n($n_list)"
+    }
+
+    $"
+    Analyze this chess move: ($move.move) (Ply ($move.ply)).
+    The engine evaluation shifted by ($move.total_delta) centipawns.
+    The primary driver was ($culprit.key) which changed by ($move.deltas | get $culprit.key).
+    
+    Context:
+    ($neighbor_ctx)
+    
+    Provide a 1-2 sentence coaching tip focusing on the structural or strategic reason for this shift.
+    "
 }
