@@ -117,7 +117,30 @@ Then restart Nushell (or start a new session) for the plugin to be active. All c
 
 # 8. Explore opening patterns — classify your most-visited positions
 ./main.nu eco-classify 100
+
+# 9. Build Coach's Notebook (RAG + Decomposed Delta Analysis)
+# This creates a structural vector index and reviews a game for tactical errors.
+use modules/coach.nu *
+coach-review 1  # Reviews game with ID 1
 ```
+
+---
+
+## Coach's Notebook
+
+The Coach's Notebook bridges the gap between raw engine scores and human strategy using a two-layer approach:
+
+1.  **Strategic Layer (Static)**: Uses structural vector similarity (via `nu-agent` RAG and `chessdb encode-fen`) to find similar positions in your history and opening theory.
+2.  **Tactical Layer (Dynamic)**: Analyzes "Decomposed Deltas" between moves. If your score drops, it identifies the primary culprit (e.g., "King Safety dropped by 1.5") and compares it to similar mistakes in your database.
+
+### Core Modules
+
+| Module | Description |
+|---|---|
+| `modules/annotate.nu` | The Delta Engine. Calculates move-by-move shifts in critter categories. |
+| `modules/rag_export.nu` | The RAG Bridge. Exports a structural vector corpus (`corpus.msgpack`) for similarity search. |
+| `modules/export_pgn.nu` | The Exporter. Merges AI/Coach annotations back into a readable format. |
+| `modules/coach.nu` | The Master Controller. Orchestrates export, review, and display. |
 
 ---
 

@@ -439,14 +439,14 @@ def generate-frequent-outcome [
 # Uses a minimum occurrence threshold to filter noise.
 # Writes reports/frequent-losses.md and reports/.cache/loss-positions.nuon.
 export def generate-frequent-losses [min_occurrences: int = 2, limit: int = 20] {
-  generate-frequent-outcome $min_occurrences $limit
-    "losses" "loss_pct" "win_pct"
-    "frequent-losses.md" "loss-positions.nuon"
-    "Frequent Loss Positions"
-    "Positions ranked by number of losses, then loss rate."
-    "Positions Where You Lose Most"
-    "| Opening | ECO | Occurrences | Losses | Loss% | Wins | Win% |"
-    "|---------|-----|-------------|--------|-------|------|------|"
+  generate-frequent-outcome $min_occurrences $limit \
+    "losses" "loss_pct" "win_pct" \
+    "frequent-losses.md" "loss-positions.nuon" \
+    "Frequent Loss Positions" \
+    "Positions ranked by number of losses, then loss rate." \
+    "Positions Where You Lose Most" \
+    "| Opening | ECO | Occurrences | Losses | Loss% | Wins | Win% |" \
+    "|---------|-----|-------------|--------|-------|------|------|" \
     { |r|
       let name = if ($r.opening_name | is-empty) { "_Unknown_" } else { $r.opening_name }
       let eco  = if ($r.eco_code    | is-empty) { "—"         } else { $r.eco_code }
@@ -458,14 +458,14 @@ export def generate-frequent-losses [min_occurrences: int = 2, limit: int = 20] 
 # Uses a minimum occurrence threshold to filter noise.
 # Writes reports/frequent-wins.md and reports/.cache/win-positions.nuon.
 export def generate-frequent-wins [min_occurrences: int = 2, limit: int = 20] {
-  generate-frequent-outcome $min_occurrences $limit
-    "wins" "win_pct" "loss_pct"
-    "frequent-wins.md" "win-positions.nuon"
-    "Frequent Win Positions"
-    "Positions ranked by number of wins, then win rate."
-    "Positions Where You Win Most"
-    "| Opening | ECO | Occurrences | Wins | Win% | Losses | Loss% |"
-    "|---------|-----|-------------|------|------|--------|-------|"
+  generate-frequent-outcome $min_occurrences $limit \
+    "wins" "win_pct" "loss_pct" \
+    "frequent-wins.md" "win-positions.nuon" \
+    "Frequent Win Positions" \
+    "Positions ranked by number of wins, then win rate." \
+    "Positions Where You Win Most" \
+    "| Opening | ECO | Occurrences | Wins | Win% | Losses | Loss% |" \
+    "|---------|-----|-------------|------|------|--------|-------|" \
     { |r|
       let name = if ($r.opening_name | is-empty) { "_Unknown_" } else { $r.opening_name }
       let eco  = if ($r.eco_code    | is-empty) { "—"         } else { $r.eco_code }
