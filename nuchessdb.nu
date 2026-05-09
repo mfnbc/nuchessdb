@@ -67,7 +67,7 @@ def main [...args] {
       # Always run critter eval
       print "Running Critter evaluation on new positions..."
       let eval_result = (critter-eval-queue 100)
-      print $"✓ Evaluated ($eval_result | length) positions"
+      print $"✓ Evaluated ($eval_result.evaluated) positions"
 
       show-overview
     }
@@ -135,7 +135,7 @@ def main [...args] {
       let limit = if ($rest | is-empty) { 20 } else { $rest.0 | into int }
       print $"Running Critter evaluation on ($limit) queued positions..."
       let result = (critter-eval-queue $limit)
-      print $"✓ Evaluated ($result | length) positions"
+      print $"✓ Evaluated ($result.evaluated) positions"
       show-overview
     }
 
