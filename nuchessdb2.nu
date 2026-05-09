@@ -78,7 +78,9 @@ def sync-chesscom [username: string, --limit: int] {
     print $"[Sync] Downloading ($target_archives | length) archives into memory..."
     let all_games = (
         $target_archives 
-        | par-each { |url| (http get $url).games } 
+        | par-each { |url| 
+            try { (http get $url).games } catch { [] }
+        } 
         | flatten
     )
     
