@@ -164,9 +164,11 @@ export def import-pgn-file [path: string, platform: string] {
   let me_username = (if $platform == "chesscom" { $cfg.identity.me.chesscom } else { $cfg.identity.me.lichess })
   let chunk_size = 400
 
-  # 1. Unique Positions (Stripped) - parallel zobrist hashing
-  let unique_positions = ($batch.unique_positions | par-each { |p| 
-    { hash: (strip-fen $p.fen | chessdb zobrist), fen: $p.fen } 
+  # 1. Unique Positions (Stripped) - batch zobrist hashing
+  let stripped_fens = ($batch.unique_positions | each { |p| strip-fen $p.fen })
+  let hashes = ($stripped_fens | chessdb zobrist)
+  let unique_positions = ($batch.unique_positions | enumerate | each { |item|
+    { hash: ($hashes | get $item.index), fen: $item.item.fen }
   } | uniq-by hash)
   let pos_stmts = ($unique_positions | chunks-of $chunk_size | each { |chunk| bulk-insert-positions $chunk })
   run-sql $db_path $pos_stmts
@@ -182,8 +184,10 @@ export def import-pgn-file [path: string, platform: string] {
     $account_stmts = ($account_stmts | append (account-upsert-sql $platform $white ($me_username != "" and ($white | str downcase) == ($me_username | str downcase))))
     $account_stmts = ($account_stmts | append (account-upsert-sql $platform $black ($me_username != "" and ($black | str downcase) == ($me_username | str downcase))))
     
-    # Generate path of hashes - parallel
-    let path_hashes = ([$initial_hash] | append ($g.moves | par-each { |m| strip-fen $m.fen | chessdb zobrist }))
+    # Generate path of hashes - batch zobrist call
+    let move_fens = ($g.moves | each { |m| strip-fen $m.fen })
+    let move_hashes = if ($move_fens | is-empty) { [] } else { $move_fens | chessdb zobrist }
+    let path_hashes = ([$initial_hash] | append $move_hashes)
     let source_game_id = $"($path)#($g.game_index)"
     
     let white_q = (sql-string $white)
@@ -209,12 +213,16 @@ export def import-pgn-file [path: string, platform: string] {
     let is_me_white = ($me_username != "" and ($white | str downcase) == ($me_username | str downcase))
     let is_me_black = ($me_username != "" and ($black | str downcase) == ($me_username | str downcase))
     
-    let hashes = ([$initial_hash] | append ($g.moves | each { |m| (strip-fen $m.fen | chessdb zobrist) }))
+    # Batch compute all hashes for this game (from and to positions)
+    let move_fens = ($g.moves | each { |m| strip-fen $m.fen })
+    let move_hashes = if ($move_fens | is-empty) { [] } else { $move_fens | chessdb zobrist }
+    let hashes = ([$initial_hash] | append $move_hashes)
+    
     $g.moves | enumerate | each { |item|
       let row = $item.item
       { 
         from_hash: ($hashes | get $item.index), 
-        to_hash: (strip-fen $row.fen | chessdb zobrist), 
+        to_hash: ($hashes | get ($item.index + 1)), 
         uci: $row.uci, 
         san: $row.san,
         result: $g.result,
