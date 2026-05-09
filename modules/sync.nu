@@ -144,7 +144,7 @@ def sync-chesscom-all [username: string] {
     let is_completed = ($completed | any { |a| $a == $archive_id })
 
     if $is_completed and not $is_last {
-      $results = ($results | append { archive_url: $archive_url, archive_id: $archive_id, skipped: true })
+      $results = ($results | append { archive_url: $archive_url, archive_id: $archive_id, skipped: true, reason: 'already completed' })
     } else {
       print $'sync: chesscom all ($username) ($n)/($total) ($archive_id)'
       $state = ($state | upsert current_archive $archive_id)
