@@ -58,10 +58,10 @@ impl PluginCommand for PgnScan {
 
     fn signature(&self) -> Signature {
         Signature::build(self.name())
-            .input_output_types(vec![(
-                Type::String,
-                Type::List(Box::new(Type::Record(vec![].into()))),
-            )])
+            .input_output_types(vec![
+                (Type::String, Type::List(Box::new(Type::Record(vec![].into())))),
+                (Type::List(Box::new(Type::String)), Type::List(Box::new(Type::Record(vec![].into())))),
+            ])
             .category(Category::Custom(crate::PLUGIN_CATEGORY.into()))
     }
 
@@ -72,14 +72,30 @@ impl PluginCommand for PgnScan {
         call: &EvaluatedCall,
         input: PipelineData,
     ) -> Result<PipelineData, LabeledError> {
-        let pgn_str = input.into_value(call.head)?.as_str()?.to_string();
+        let input_value = input.into_value(call.head)?;
         let span = call.head;
-        let games = crate::core::scan_pgn(&pgn_str, span)?;
-        let values: Vec<Value> = games
-            .into_iter()
-            .map(|g| scan_game_value(g, span))
-            .collect();
-        Ok(PipelineData::Value(Value::list(values, span), None))
+
+        let mut all_values: Vec<Value> = Vec::new();
+
+        match input_value {
+            Value::String { val, .. } => {
+                let games = crate::core::scan_pgn(&val, span)?;
+                let values: Vec<Value> = games.into_iter().map(|g| scan_game_value(g, span)).collect();
+                all_values.extend(values);
+            }
+            Value::List { vals, .. } => {
+                for v in vals {
+                    let s = v.as_str()?;
+                    let games = crate::core::scan_pgn(s, span)?;
+                    all_values.extend(games.into_iter().map(|g| scan_game_value(g, span)));
+                }
+            }
+            _ => {
+                return Err(LabeledError::new("Expected string or list of strings").with_label("invalid input", call.head));
+            }
+        }
+
+        Ok(PipelineData::Value(Value::list(all_values, span), None))
     }
 }
 
@@ -184,10 +200,10 @@ impl PluginCommand for PgnToFens {
 
     fn signature(&self) -> Signature {
         Signature::build(self.name())
-            .input_output_types(vec![(
-                Type::String,
-                Type::List(Box::new(Type::Record(vec![].into()))),
-            )])
+            .input_output_types(vec![
+                (Type::String, Type::List(Box::new(Type::Record(vec![].into())))),
+                (Type::List(Box::new(Type::String)), Type::List(Box::new(Type::Record(vec![].into())))),
+            ])
             .category(Category::Custom(crate::PLUGIN_CATEGORY.into()))
     }
 
@@ -198,10 +214,32 @@ impl PluginCommand for PgnToFens {
         call: &EvaluatedCall,
         input: PipelineData,
     ) -> Result<PipelineData, LabeledError> {
-        let pgn_str = input.into_value(call.head)?.as_str()?.to_string();
+        let input_value = input.into_value(call.head)?;
         let span = call.head;
-        let rows = crate::core::pgn_to_fens(&pgn_str, span)?;
-        Ok(PipelineData::Value(move_rows_value(&rows, span), None))
+        let mut all_rows: Vec<Value> = Vec::new();
+
+        match input_value {
+            Value::String { val, .. } => {
+                let rows = crate::core::pgn_to_fens(&val, span)?;
+                if let Value::List { vals, .. } = move_rows_value(&rows, span) {
+                    all_rows.extend(vals);
+                }
+            }
+            Value::List { vals, .. } => {
+                for v in vals {
+                    let s = v.as_str()?;
+                    let rows = crate::core::pgn_to_fens(s, span)?;
+                    if let Value::List { vals: inner, .. } = move_rows_value(&rows, span) {
+                        all_rows.extend(inner);
+                    }
+                }
+            }
+            _ => {
+                return Err(LabeledError::new("Expected string or list of strings").with_label("invalid input", call.head));
+            }
+        }
+
+        Ok(PipelineData::Value(Value::list(all_rows, span), None))
     }
 }
 
@@ -218,7 +256,10 @@ impl PluginCommand for PgnToBatch {
 
     fn signature(&self) -> Signature {
         Signature::build(self.name())
-            .input_output_types(vec![(Type::String, Type::Record(vec![].into()))])
+            .input_output_types(vec![
+                (Type::String, Type::Record(vec![].into())),
+                (Type::List(Box::new(Type::String)), Type::List(Box::new(Type::Record(vec![].into())))),
+            ])
             .category(Category::Custom(crate::PLUGIN_CATEGORY.into()))
     }
 
@@ -229,9 +270,24 @@ impl PluginCommand for PgnToBatch {
         call: &EvaluatedCall,
         input: PipelineData,
     ) -> Result<PipelineData, LabeledError> {
-        let pgn_str = input.into_value(call.head)?.as_str()?.to_string();
+        let input_value = input.into_value(call.head)?;
         let span = call.head;
-        let batch = crate::core::pgn_to_batch_record(&pgn_str, span)?;
-        Ok(PipelineData::Value(batch_record_value(batch, span), None))
+
+        match input_value {
+            Value::String { val, .. } => {
+                let batch = crate::core::pgn_to_batch_record(&val, span)?;
+                Ok(PipelineData::Value(batch_record_value(batch, span), None))
+            }
+            Value::List { vals, .. } => {
+                let mut recs: Vec<Value> = Vec::new();
+                for v in vals {
+                    let s = v.as_str()?;
+                    let batch = crate::core::pgn_to_batch_record(s, span)?;
+                    recs.push(batch_record_value(batch, span));
+                }
+                Ok(PipelineData::Value(Value::list(recs, span), None))
+            }
+            _ => Err(LabeledError::new("Expected string or list of strings").with_label("invalid input", call.head)),
+        }
     }
 }
