@@ -134,6 +134,24 @@ def report-moves [zobrist: string] {
     " --params [$zobrist]
 }
 
+def review-game [game_id: string] {
+    let db = (_db_path)
+    # Join moves to the *next* position to see the evaluation of the board AFTER the move was played
+    open $db | query db "
+        SELECT 
+            m.ply, 
+            m.move_number, 
+            m.color, 
+            m.san, 
+            p.critter_score, 
+            p.nnue_score 
+        FROM moves m
+        JOIN positions p ON m.next_position_id = p.zobrist
+        WHERE m.game_id = ?
+        ORDER BY m.ply ASC
+    " --params [$game_id]
+}
+
 # --- 4. Main Interface ---
 def main [...args] {
     if ($args | is-empty) { print-help; return }
@@ -146,6 +164,10 @@ def main [...args] {
         "explore" => {
             if ($rest | is-empty) { print "Provide Zobrist hash of position"; return }
             report-moves $rest.0 | table
+        }
+        "review" => {
+            if ($rest | is-empty) { print "Provide the game's source_id (URL)"; return }
+            review-game $rest.0 | table
         }
         "status" => {
             let db = (_db_path)
@@ -163,5 +185,6 @@ COMMANDS:
   init              Initialize relational analytics engine
   sync <user>       Stream games from chess.com
   explore <zobrist> Show move frequencies and ELO performance for a position
+  review <game_id>  Show move-by-move engine evaluations for a specific game
   status            Platform health and data counts"
 }
