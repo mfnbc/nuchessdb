@@ -76,7 +76,7 @@ impl PluginCommand for ProcessCorpus {
             let mut black_name = "".to_string();
             let mut white_elo = 0;
             let mut black_elo = 0;
-            let mut played_at = "unknown".to_string();
+            let played_at = "unknown".to_string();
             let mut time_control = "unknown".to_string();
             let mut eco = "unknown".to_string();
             let mut opening = "unknown".to_string();
