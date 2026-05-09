@@ -1,6 +1,12 @@
 pub mod chess;
 pub mod core;
+pub mod critter_eval_cmd;
+pub mod eval;
+pub mod nnue_eval_cmd;
 pub mod pgn_to_fens;
+pub mod position_encoder;
+pub mod process_corpus;
+pub mod utils;
 pub mod zobrist;
 
 use nu_plugin::Plugin;
@@ -27,12 +33,15 @@ impl Plugin for ChessdbPlugin {
         env!("CARGO_PKG_VERSION").to_string()
     }
 
-    // Keep a very small, focused command surface: PGN parsing + zobrist helper.
+    // Small, focused command surface including the evaluations
     fn commands(&self) -> Vec<Box<dyn nu_plugin::PluginCommand<Plugin = Self>>> {
         vec![
+            Box::new(critter_eval_cmd::CritterEval),
+            Box::new(nnue_eval_cmd::NnueEval),
             Box::new(pgn_to_fens::PgnToBatch),
             Box::new(pgn_to_fens::PgnToFens),
             Box::new(pgn_to_fens::PgnScan),
+            Box::new(process_corpus::ProcessCorpus),
             Box::new(zobrist::Zobrist),
         ]
     }
