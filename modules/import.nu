@@ -170,8 +170,22 @@ export def import-pgn-file [path: string, platform: string] {
   let unique_positions = ($batch.unique_positions | enumerate | each { |item|
     { hash: ($hashes | get $item.index), fen: $item.item.fen }
   } | uniq-by hash)
+  
+  # Insert positions (ON CONFLICT DO NOTHING handles duplicates)
   let pos_stmts = ($unique_positions | chunks-of $chunk_size | each { |chunk| bulk-insert-positions $chunk })
   run-sql $db_path $pos_stmts
+  
+  # Check which positions already have Critter evals (batch query)
+  let position_hashes = ($unique_positions | get hash | each { |h| "'" + $h + "'" } | str join ", ")
+  let existing_evals = if ($position_hashes | is-empty) { [] } else {
+    open $db_path | query db ([
+      "SELECT p.canonical_hash FROM positions p ",
+      "JOIN position_critter_evals e ON e.position_id = p.id ",
+      "WHERE p.canonical_hash IN (", $position_hashes, ")"
+    ] | str join)
+  }
+  let hashes_with_evals = if ($existing_evals | is-empty) { [] } else { $existing_evals | get canonical_hash }
+  let needs_eval = ($unique_positions | where { |p| not ($p.hash in $hashes_with_evals) })
 
   # 2. Accounts & Games (with path_json)
   mut account_stmts = []
@@ -245,22 +259,10 @@ export def import-pgn-file [path: string, platform: string] {
   run-sql $db_path $stat_stmts
 
   # 5. In-line Critter Evaluation (always enabled)
-  print "Running real-time Critter analysis..."
+  # Note: needs_eval was already computed above (positions without Critter evals)
   
-  # Batch check: find positions that need evaluation in a single query
-  let position_hashes = ($unique_positions | get hash | each { |h| "'" + $h + "'" } | str join ", ")
-  let existing_evals = if ($position_hashes | is-empty) { [] } else {
-    open $db_path | query db ([
-      "SELECT p.canonical_hash FROM positions p ",
-      "JOIN position_critter_evals e ON e.position_id = p.id ",
-      "WHERE p.canonical_hash IN (", $position_hashes, ")"
-    ] | str join)
-  }
-  let existing_hashes = ($existing_evals | get canonical_hash)
-  let eval_targets = ($unique_positions | where { |p| not ($p.hash in $existing_hashes) })
-  
-  if not ($eval_targets | is-empty) {
-      print $"Evaluating ($eval_targets | length) new positions with batch Critter analysis..."
+  if not ($needs_eval | is-empty) {
+      print $"Evaluating ($needs_eval | length) new positions with batch Critter analysis..."
       use ./critter.nu *
       let c_cfg = (load-config | get enrichment.critter)
       let cn = ($c_cfg.name | default "critter-eval")
@@ -268,11 +270,11 @@ export def import-pgn-file [path: string, platform: string] {
       let created_at = (date now | format date "%Y-%m-%d %H:%M:%S")
       
       # Batch evaluation - send all FENs at once
-      let target_fens = ($eval_targets | get fen)
+      let target_fens = ($needs_eval | get fen)
       let eval_records = ($target_fens | chessdb critter-eval)
       
       # Combine hashes with evaluation results
-      let evals = ($eval_targets | enumerate | each { |item|
+      let evals = ($needs_eval | enumerate | each { |item|
           { hash: $item.item.hash, eval_record: ($eval_records | get $item.index) }
       })
       
