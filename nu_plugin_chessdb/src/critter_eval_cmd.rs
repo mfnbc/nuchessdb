@@ -1,5 +1,6 @@
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
-use nu_protocol::{Category, LabeledError, PipelineData, Signature, SyntaxShape, Type};
+use nu_protocol::{Category, LabeledError, PipelineData, Signature, SyntaxShape, Type, Value};
+use rayon::prelude::*;
 
 pub struct CritterEval;
 
@@ -11,12 +12,18 @@ impl PluginCommand for CritterEval {
     }
 
     fn description(&self) -> &str {
-        "Evaluate a chess position (FEN from pipeline) and return a full critter-eval record."
+        "Evaluate a chess position or list of positions (FEN from pipeline) and return full critter-eval record(s)."
     }
 
     fn signature(&self) -> Signature {
         Signature::build(self.name())
-            .input_output_types(vec![(Type::String, Type::Record(vec![].into()))])
+            .input_output_types(vec![
+                (Type::String, Type::Record(vec![].into())),
+                (
+                    Type::List(Box::new(Type::String)),
+                    Type::List(Box::new(Type::Record(vec![].into()))),
+                ),
+            ])
             .named(
                 "engine-score",
                 SyntaxShape::Int,
@@ -33,22 +40,52 @@ impl PluginCommand for CritterEval {
         call: &EvaluatedCall,
         input: PipelineData,
     ) -> Result<PipelineData, LabeledError> {
-        let fen_str = input.into_value(call.head)?.as_str()?.to_string();
         let span = call.head;
-
         let engine_score: Option<i64> = call.get_flag("engine-score")?;
+        let input_value = input.into_value(span)?;
 
-        let record = crate::eval::analyze_fen_with_engine_score(&fen_str, engine_score)
-            .map_err(|e| LabeledError::new(e.to_string()).with_label("eval error", span))?;
+        match input_value {
+            Value::String { val, .. } => {
+                // Single FEN string
+                let record = crate::eval::analyze_fen_with_engine_score(&val, engine_score)
+                    .map_err(|e| LabeledError::new(e.to_string()).with_label("eval error", span))?;
 
-        // Serialize the full record to a Nu Value via serde_json -> Value::record
-        let json_val = serde_json::to_value(&record).map_err(|e| {
-            LabeledError::new(e.to_string()).with_label("serialization error", span)
-        })?;
+                let json_val = serde_json::to_value(&record).map_err(|e| {
+                    LabeledError::new(e.to_string()).with_label("serialization error", span)
+                })?;
 
-        Ok(PipelineData::Value(
-            crate::utils::json_to_nu_value(json_val, span),
-            None,
-        ))
+                Ok(PipelineData::Value(
+                    crate::utils::json_to_nu_value(json_val, span),
+                    None,
+                ))
+            }
+            Value::List { vals, .. } => {
+                // List of FEN strings - process in parallel using Rayon
+                let fens: Result<Vec<String>, LabeledError> = vals
+                    .iter()
+                    .map(|v| {
+                        v.as_str()
+                            .map(|s| s.to_string())
+                            .map_err(|e| LabeledError::new(e.to_string()))
+                    })
+                    .collect();
+                let fens = fens?;
+
+                // Parallel evaluation using Rayon
+                let results: Vec<Value> = fens
+                    .par_iter()
+                    .filter_map(|fen| {
+                        crate::eval::analyze_fen_with_engine_score(fen, engine_score)
+                            .ok()
+                            .and_then(|record| serde_json::to_value(&record).ok())
+                            .map(|json_val| crate::utils::json_to_nu_value(json_val, span))
+                    })
+                    .collect();
+
+                Ok(PipelineData::Value(Value::list(results, span), None))
+            }
+            _ => Err(LabeledError::new("Expected string or list of strings")
+                .with_label("invalid input type", span)),
+        }
     }
 }

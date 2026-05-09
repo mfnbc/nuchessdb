@@ -260,22 +260,21 @@ export def import-pgn-file [path: string, platform: string] {
   let eval_targets = ($unique_positions | where { |p| not ($p.hash in $existing_hashes) })
   
   if not ($eval_targets | is-empty) {
-      print $"Evaluating ($eval_targets | length) new positions in parallel..."
+      print $"Evaluating ($eval_targets | length) new positions with batch Critter analysis..."
       use ./critter.nu *
       let c_cfg = (load-config | get enrichment.critter)
       let cn = ($c_cfg.name | default "critter-eval")
       let cm = ($c_cfg.model | default "")
       let created_at = (date now | format date "%Y-%m-%d %H:%M:%S")
       
-      # Parallel evaluation of positions
-      let evals = ($eval_targets | par-each { |p|
-          try {
-              let record = ($p.fen | chessdb critter-eval)
-              { hash: $p.hash, eval_record: $record }
-          } catch {
-              null
-          }
-      } | where { $in != null })
+      # Batch evaluation - send all FENs at once
+      let target_fens = ($eval_targets | get fen)
+      let eval_records = ($target_fens | chessdb critter-eval)
+      
+      # Combine hashes with evaluation results
+      let evals = ($eval_targets | enumerate | each { |item|
+          { hash: $item.item.hash, eval_record: ($eval_records | get $item.index) }
+      })
       
       # Batch fetch position IDs for all evaluated positions
       if not ($evals | is-empty) {
