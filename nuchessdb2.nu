@@ -71,9 +71,9 @@ def init-schema [] {
 
 # --- 2. Ingestion Pipeline ---
 # Cleanest path: chess.com JSON -> Streamed SQLite ingestion.
-def sync-chesscom [username: string, --limit: int = 1] {
+def sync-chesscom [username: string, --limit: int] {
     let archives = (http get $"https://api.chess.com/pub/player/($username)/games/archives").archives
-    let target_archives = ($archives | last $limit)
+    let target_archives = if ($limit == null) { $archives } else { $archives | last $limit }
 
     print $"[Sync] Downloading ($target_archives | length) archives into memory..."
     let all_games = (
