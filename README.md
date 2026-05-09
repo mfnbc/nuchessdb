@@ -17,17 +17,30 @@ cd nu_plugin_chessdb && cargo build --release
 plugin add nu_plugin_chessdb/target/release/nu_plugin_chessdb
 ```
 
-### 2. Setup Database
+### 2. Setup and Import
+Initialize the database and import PGN files. The system uses **Structural Collapse** (Zobrist hashing) to deduplicate positions across your entire database and tracks personalized "Me" statistics.
+
 ```nu
-./main.nu init
-./main.nu sync chesscom all <your-username>
+# Initialize schema and ECO data
+use modules/db.nu *
+init-db
+
+# Import PGN with real-time Critter analysis (optional)
+use modules/import.nu *
+import-pgn-file ./data/my_games.pgn chesscom --with-critter
 ```
 
-### 3. Enrich & Analyze
+### 3. Analytics & Enrichment
+Identify patterns where your personal performance ("Me") deviates from global averages or engine evaluations.
+
 ```nu
-./main.nu critter-enqueue-games
-./main.nu critter-eval 100
-./main.nu eco-classify
+# View top "Collapses" (positions where you lose more than average)
+use modules/query.nu *
+position-report 10
+
+# Batch evaluate popular positions in the background
+use modules/critter.nu *
+critter-eval-queue 50
 ```
 
 ### 4. Run Coach Review
