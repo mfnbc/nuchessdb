@@ -142,7 +142,7 @@ def account-upsert-sql [platform: string, username: string, is_me: bool] {
   }
 }
 
-export def import-pgn-file [path: string, platform: string, --with-critter] {
+export def import-pgn-file [path: string, platform: string] {
   let cfg = load-config
   let db_path = $cfg.database.path
   let text = (open $path)
@@ -230,36 +230,34 @@ export def import-pgn-file [path: string, platform: string, --with-critter] {
   let stat_stmts = (calculate-stats-stmts $all_edges)
   run-sql $db_path $stat_stmts
 
-  # 5. In-line Critter Evaluation
-  if $with_critter {
-    print "Running real-time Critter analysis..."
-    let eval_targets = ($unique_positions | where { |p| 
-        (open $db_path | query db (["SELECT 1 FROM position_critter_evals WHERE position_id = (SELECT id FROM positions WHERE canonical_hash = '", $p.hash, "')"] | str join) | is-empty)
-    })
-    
-    if not ($eval_targets | is-empty) {
-        print $"Evaluating ($eval_targets | length) new positions..."
-        use ./critter.nu *
-        let c_cfg = (load-config | get enrichment.critter)
-        let cn = ($c_cfg.name | default "critter-eval")
-        let cm = ($c_cfg.model | default "")
-        let created_at = (date now | format date "%Y-%m-%d %H:%M:%S")
-        
-        let evals = ($eval_targets | each { |p|
-            try {
-                let pos_id = (open $db_path | query db (["SELECT id FROM positions WHERE canonical_hash = '", $p.hash, "'"] | str join) | get 0.id)
-                let record = ($p.fen | chessdb critter-eval)
-                { position_id: $pos_id, eval_record: $record }
-            } catch {
-                null
-            }
-        } | where { $in != null })
-        
-        if not ($evals | is-empty) {
-            let eval_stmts = (bulk-critter-eval-insert-sql $evals $cn $cm $created_at)
-            run-sql $db_path $eval_stmts
-        }
-    }
+  # 5. In-line Critter Evaluation (always enabled)
+  print "Running real-time Critter analysis..."
+  let eval_targets = ($unique_positions | where { |p| 
+      (open $db_path | query db (["SELECT 1 FROM position_critter_evals WHERE position_id = (SELECT id FROM positions WHERE canonical_hash = '", $p.hash, "')"] | str join) | is-empty)
+  })
+  
+  if not ($eval_targets | is-empty) {
+      print $"Evaluating ($eval_targets | length) new positions..."
+      use ./critter.nu *
+      let c_cfg = (load-config | get enrichment.critter)
+      let cn = ($c_cfg.name | default "critter-eval")
+      let cm = ($c_cfg.model | default "")
+      let created_at = (date now | format date "%Y-%m-%d %H:%M:%S")
+      
+      let evals = ($eval_targets | each { |p|
+          try {
+              let pos_id = (open $db_path | query db (["SELECT id FROM positions WHERE canonical_hash = '", $p.hash, "'"] | str join) | get 0.id)
+              let record = ($p.fen | chessdb critter-eval)
+              { position_id: $pos_id, eval_record: $record }
+          } catch {
+              null
+          }
+      } | where { $in != null })
+      
+      if not ($evals | is-empty) {
+          let eval_stmts = (bulk-critter-eval-insert-sql $evals $cn $cm $created_at)
+          run-sql $db_path $eval_stmts
+      }
   }
 
   print "Import complete (Structural Collapse, Stats, and Critter enabled)."

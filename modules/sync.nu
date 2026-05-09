@@ -123,7 +123,7 @@ def sync-chesscom-latest [username: string] {
   if $saved == null {
     { archive_url: $archive_url, skipped: true, reason: 'no pgn found' }
   } else {
-    let imported = (import-pgn-file $saved.file "chesscom" --with-critter)
+    let imported = (import-pgn-file $saved.file "chesscom")
     { archive_url: $archive_url, saved: $saved, imported: $imported }
   }
 }
@@ -155,7 +155,7 @@ def sync-chesscom-all [username: string] {
         save-sync-state $username $state | ignore
         $results = ($results | append { archive_url: $archive_url, archive_id: $archive_id, skipped: true, reason: 'no pgn found' })
       } else {
-        let imported = (import-pgn-file $saved.file "chesscom" --with-critter)
+        let imported = (import-pgn-file $saved.file "chesscom")
         $state = (update-sync-state $state $archive_id true ((date now) | into string))
         save-sync-state $username $state | ignore
         $results = ($results | append { archive_url: $archive_url, archive_id: $archive_id, skipped: false, saved: $saved, imported: $imported })

@@ -114,8 +114,8 @@ def main [...args] {
       print $"Importing ($path) as ($platform) games with Critter evaluation..."
       init-db | ignore
 
-      # Always use critter evaluation
-      import-pgn-file $path $platform --with-critter
+      # Critter evaluation is always enabled
+      import-pgn-file $path $platform
 
       print "✓ Import complete"
       show-overview
