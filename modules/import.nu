@@ -10,7 +10,7 @@ def headers-list-to-record [headers: list<record>] {
 export def bulk-insert-positions [rows: list<record>] {
   let values = ($rows | each { |row|
     let fen = (strip-fen $row.fen)
-    let hash = ($fen | chessdb zobrist)
+    let hash = $row.hash
     let parts = ($fen | split row " ")
     let side     = ($parts | get 1)
     let castling = ($parts | get 2)
