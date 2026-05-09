@@ -186,14 +186,20 @@ export def critter-eval-queue [limit: int = 20] {
         { position_id: $job.position_id, status: "done", error: null, record: (critter-fixture-record $job.canonical_fen) }
       }
     } else {
-      $jobs | each { |job|
-        let position_id = $job.position_id
-        try {
-          let record = ($job.canonical_fen | chessdb critter-eval)
-          { position_id: $position_id, status: "done", error: null, record: $record }
-        } catch { |err|
-          let err_text = if ($err | columns | any { |c| $c == "msg" }) { $err.msg } else { $err | to text }
-          { position_id: $position_id, status: "failed", error: $err_text, record: null }
+      # BATCH EVALUATION
+      try {
+        let fens = ($jobs | get canonical_fen)
+        let eval_records = ($fens | chessdb critter-eval)
+        
+        $jobs | enumerate | each { |item|
+          let job = $item.item
+          let record = ($eval_records | get $item.index)
+          { position_id: $job.position_id, status: "done", error: null, record: $record }
+        }
+      } catch { |err|
+        let err_text = if ($err | columns | any { |c| $c == "msg" }) { $err.msg } else { $err | to text }
+        $jobs | each { |job|
+          { position_id: $job.position_id, status: "failed", error: $err_text, record: null }
         }
       }
     }
