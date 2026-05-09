@@ -17,36 +17,34 @@ cd nu_plugin_chessdb && cargo build --release
 plugin add nu_plugin_chessdb/target/release/nu_plugin_chessdb
 ```
 
-### 2. Setup and Import
-Initialize the database and import PGN files. The system uses **Structural Collapse** (Zobrist hashing) to deduplicate positions across your entire database and tracks personalized "Me" statistics.
-
-```nu
-# Initialize schema and ECO data
-use modules/db.nu *
-init-db
-
-# Import PGN with real-time Critter analysis (optional)
-use modules/import.nu *
-import-pgn-file ./data/my_games.pgn chesscom --with-critter
+### 2. Initialize Database
+```sh
+nu nuchessdb.nu init
 ```
 
-### 3. Analytics & Enrichment
-Identify patterns where your personal performance ("Me") deviates from global averages or engine evaluations.
+### 3. Import Games
 
-```nu
-# View top "Collapses" (positions where you lose more than average)
-use modules/query.nu *
-position-report 10
-
-# Batch evaluate popular positions in the background
-use modules/critter.nu *
-critter-eval-queue 50
+**Option A: Sync from chess.com/lichess**
+```sh
+# Download all games with real-time Critter analysis
+nu nuchessdb.nu sync chesscom <your-username> --with-critter
 ```
 
-### 4. Run Coach Review
-```nu
-use modules/coach.nu *
-coach-review 1  # Reviews game ID 1 with AI commentary
+**Option B: Import from PGN file**
+```sh
+nu nuchessdb.nu import ./data/my_games.pgn chesscom --with-critter
+```
+
+### 4. Analyze Your Games
+```sh
+# View database status
+nu nuchessdb.nu status
+
+# View positions where you lose most often ("Collapses")
+nu nuchessdb.nu report 10
+
+# Get AI coaching for a specific game
+nu nuchessdb.nu coach-review 1
 ```
 
 ## How it Works
@@ -59,22 +57,59 @@ coach-review 1  # Reviews game ID 1 with AI commentary
 
 ## Core Commands
 
+All commands are run via: `nu nuchessdb.nu <command> [args]`
+
 | Command | Description |
 |---|---|
-| `sync` | Import games from chess.com/lichess |
-| `status` | Database overview (games, positions, queues) |
-| `report` | Performance stats for most-visited positions |
-| `critter-eval` | Run decomposed structural evaluation |
-| `eco-classify` | Map positions to ECO opening names |
-| `coach-review` | Generate AI-driven game annotations |
+| `init` | Initialize database and schema |
+| `sync <platform> <username>` | Download and import games from chess.com/lichess |
+| `import <path.pgn> <platform>` | Import PGN file into database |
+| `status` | Database overview (games, positions, evaluations) |
+| `report [limit]` | Performance stats for most-visited positions |
+| `critter-eval [limit]` | Run decomposed structural evaluation queue |
+| `eco-classify [limit]` | Top positions with ECO opening names |
+| `coach-review <game_id>` | Generate AI-driven game annotations |
+| `recent [limit]` | Show recently imported games |
+| `top [limit]` | Most-visited positions |
+
+Run `nu nuchessdb.nu help` for complete usage information.
 
 ## Advanced Querying
 
-Set `$db = (open ./data/nuchessdb.sqlite)` and query directly:
+The database is just SQLite - you can query it directly in Nushell:
 
 ```nu
+let db = (open ./data/nuchessdb.sqlite)
+
 # Win rate by color
-$db | query db "SELECT CASE WHEN g.white_account_id = m.id THEN 'white' ELSE 'black' END AS color, COUNT(*) AS games, ROUND(100.0 * SUM(CASE WHEN (g.white_account_id = m.id AND g.result = '1-0') OR (g.black_account_id = m.id AND g.result = '0-1') THEN 1 ELSE 0 END) / COUNT(*), 1) AS win_pct FROM games g JOIN accounts m ON m.is_me = 1 AND (g.white_account_id = m.id OR g.black_account_id = m.id) GROUP BY color"
+$db | query db "
+  SELECT 
+    CASE WHEN g.white_account_id = m.id THEN 'white' ELSE 'black' END AS color,
+    COUNT(*) AS games,
+    ROUND(100.0 * SUM(CASE 
+      WHEN (g.white_account_id = m.id AND g.result = '1-0') 
+        OR (g.black_account_id = m.id AND g.result = '0-1') 
+      THEN 1 ELSE 0 
+    END) / COUNT(*), 1) AS win_pct
+  FROM games g 
+  JOIN accounts m ON m.is_me = 1 
+    AND (g.white_account_id = m.id OR g.black_account_id = m.id)
+  GROUP BY color
+"
 ```
 
 Refer to `docs/query-primer.md` for more examples.
+
+## Advanced Module Usage
+
+For scripting or custom workflows, import modules directly:
+
+```nu
+use modules/db.nu *
+use modules/import.nu *
+use modules/critter.nu *
+
+init-db
+import-pgn-file ./data/games.pgn chesscom --with-critter
+critter-eval-queue 50
+```
