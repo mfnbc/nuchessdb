@@ -9,11 +9,17 @@ def _db_path [] { "./chess.db" }
 # --- 1. Relational Analytics Schema ---
 def init-schema [] {
     let db = (_db_path)
-    open $db | query db "
-        PRAGMA journal_mode = WAL;
-        PRAGMA synchronous = NORMAL;
+    
+    # In Nushell, the easiest way to initialize a valid SQLite file is to insert a dummy table
+    if not ($db | path exists) {
+        [{init: 1}] | into sqlite $db -t _init_db
+    }
+    
+    # Nushell's `query db` only supports single statements per string
+    open $db | query db "PRAGMA journal_mode = WAL;" | ignore
+    open $db | query db "PRAGMA synchronous = NORMAL;" | ignore
 
-        -- Using Natural Keys (source_id) to allow in-memory linking
+    open $db | query db "
         CREATE TABLE IF NOT EXISTS games (
             source_id TEXT PRIMARY KEY,
             platform TEXT,
@@ -28,8 +34,9 @@ def init-schema [] {
             opening TEXT,
             raw_json TEXT
         );
+    " | ignore
 
-        -- Using Natural Keys (zobrist) to allow in-memory deduplication
+    open $db | query db "
         CREATE TABLE IF NOT EXISTS positions (
             zobrist TEXT PRIMARY KEY,
             fen TEXT UNIQUE,
@@ -39,8 +46,9 @@ def init-schema [] {
             is_theoretical BOOLEAN DEFAULT 0,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
+    " | ignore
 
-        -- The edges of the graph
+    open $db | query db "
         CREATE TABLE IF NOT EXISTS moves (
             game_id TEXT,
             position_id TEXT,
@@ -56,9 +64,9 @@ def init-schema [] {
             FOREIGN KEY(position_id) REFERENCES positions(zobrist),
             FOREIGN KEY(next_position_id) REFERENCES positions(zobrist)
         );
+    " | ignore
 
-        CREATE INDEX IF NOT EXISTS idx_moves_pos ON moves(position_id);
-    "
+    open $db | query db "CREATE INDEX IF NOT EXISTS idx_moves_pos ON moves(position_id);" | ignore
 }
 
 # --- 2. Ingestion Pipeline ---
@@ -90,21 +98,17 @@ def import-records [games: list, platform: string] {
         
         # 2. Nushell pipes the flat arrays into a temporary database instantly
         rm -f $temp_db
+        "" | save -f $temp_db
         $corpus.games | into sqlite $temp_db -t temp_games
         $corpus.positions | into sqlite $temp_db -t temp_positions
         $corpus.moves | into sqlite $temp_db -t temp_moves
 
         # 3. Single Transaction Merge
         print $"[Database] Merging corpus into ($db)..."
-        open $db | query db $"
-           ATTACH DATABASE '($temp_db)' AS sync;
-           BEGIN TRANSACTION;
-           INSERT OR IGNORE INTO games SELECT * FROM sync.temp_games;
-           INSERT OR IGNORE INTO positions SELECT * FROM sync.temp_positions;
-           INSERT OR IGNORE INTO moves SELECT * FROM sync.temp_moves;
-           COMMIT;
-           DETACH DATABASE sync;
-        "
+        # Nushell handles ATTACH best via a single command block or by dumping to SQL and importing
+        open $temp_db | query db "SELECT * FROM temp_games;" | into sqlite $db -t games
+        open $temp_db | query db "SELECT * FROM temp_positions;" | into sqlite $db -t positions
+        open $temp_db | query db "SELECT * FROM temp_moves;" | into sqlite $db -t moves
         
         rm -f $temp_db
         print "✓ Batch merge complete."
@@ -127,7 +131,7 @@ def report-moves [zobrist: string] {
         WHERE m.position_id = (SELECT id FROM positions WHERE zobrist = ?)
         GROUP BY m.san
         ORDER BY frequency DESC
-    " --parameters [$zobrist]
+    " --params [$zobrist]
 }
 
 # --- 4. Main Interface ---
@@ -151,6 +155,7 @@ def main [...args] {
     }
 }
 
+
 def print-help [] {
     print "nuchessdb2 - Professional Chess Analytics Platform
 
@@ -158,8 +163,5 @@ COMMANDS:
   init              Initialize relational analytics engine
   sync <user>       Stream games from chess.com
   explore <zobrist> Show move frequencies and ELO performance for a position
-  status            Platform health and data counts
-"
+  status            Platform health and data counts"
 }
-
-main $nu.args
