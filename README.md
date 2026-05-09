@@ -56,10 +56,23 @@ nu nuchessdb.nu coach-review 1
 ## How it Works
 
 - **`nu_plugin_chessdb`**: Rust plugin for all chess semantics (FEN, hashing, NNUE, critter eval).
+  - **Batch Processing**: Plugin accepts lists of FENs for efficient parallel processing
+  - **Zobrist hashing**: Process thousands of positions in a single call
+  - **Critter evaluation**: Uses Rayon for multi-core parallel analysis
 - **Modules**: Nushell orchestration for sync, reporting, and RAG integration.
+  - **List-first design**: All operations work with full lists, not individual items
+  - **Smart caching**: Skip evaluation of positions that already exist
 - **Coach's Notebook**:
     - **Strategic (Static)**: Structural vector similarity finds similar historical/opening positions.
     - **Tactical (Dynamic)**: Identifies the "Culprit" behind eval drops (e.g., King Safety vs Material).
+
+## Performance
+
+The pipeline is optimized for batch processing:
+- **Zobrist hashing**: Single plugin call for all positions (vs thousands of individual calls)
+- **Critter evaluation**: Batch analysis with internal parallelization (Rayon)
+- **Smart skipping**: Re-imports skip already-evaluated positions
+- **Result**: ~1m50s to import and evaluate 3,425 positions (38 games) with full Critter analysis
 
 ## Core Commands
 
@@ -116,6 +129,27 @@ use modules/import.nu *
 use modules/critter.nu *
 
 init-db
-import-pgn-file ./data/games.pgn chesscom --with-critter
+import-pgn-file ./data/games.pgn chesscom
 critter-eval-queue 50
 ```
+
+**Note:** The `--with-critter` flag has been removed. Critter evaluation is now always enabled by default.
+
+## Architecture
+
+The system follows a batch-processing architecture:
+
+```
+Nushell Script
+    ↓ (collect all FENs into list)
+    ↓ (single serialization)
+Rust Plugin
+    ↓ (deserialize once)
+    ↓ (Rayon parallel processing across CPU cores)
+    ↓ (serialize results once)
+Nushell Script
+    ↓ (process results as list)
+SQLite Database
+```
+
+This eliminates plugin call overhead and maximizes CPU utilization for analysis.
