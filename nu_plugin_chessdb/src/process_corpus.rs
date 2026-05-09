@@ -24,6 +24,12 @@ impl PluginCommand for ProcessCorpus {
     fn signature(&self) -> Signature {
         Signature::build(PluginCommand::name(self))
             .input_output_type(Type::String, Type::Any)
+            .named(
+                "username",
+                nu_protocol::SyntaxShape::String,
+                "The username of the player to determine result relative to them",
+                Some('u')
+            )
             .category(Category::Custom(PLUGIN_CATEGORY.to_string()))
     }
 
@@ -52,10 +58,52 @@ impl PluginCommand for ProcessCorpus {
 
         let mut unique_positions = HashSet::new();
 
+        let username: Option<String> = call.get_flag("username")?;
+
         for g in games_array {
             let url = g.get("url").and_then(|v| v.as_str()).unwrap_or("unknown");
             
+            // Extract the result relative to the user
+            let mut result_str = "unknown".to_string();
+            let mut platform = "unknown".to_string();
+            let mut white_name = "".to_string();
+            let mut black_name = "".to_string();
+            let mut white_elo = 0;
+            let mut black_elo = 0;
+            let mut played_at = "unknown".to_string();
+            let mut time_control = "unknown".to_string();
+            let mut eco = "unknown".to_string();
+            let mut opening = "unknown".to_string();
+
+            if let Some(uname) = &username {
+                white_name = g.get("white").and_then(|w| w.get("username")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                black_name = g.get("black").and_then(|b| b.get("username")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                
+                if white_name.eq_ignore_ascii_case(uname) {
+                    result_str = g.get("white").and_then(|w| w.get("result")).and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+                } else if black_name.eq_ignore_ascii_case(uname) {
+                    result_str = g.get("black").and_then(|b| b.get("result")).and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+                }
+
+                platform = if url.contains("chess.com") { "chesscom".to_string() } else { "lichess".to_string() };
+                white_elo = g.get("white").and_then(|w| w.get("rating")).and_then(|v| v.as_i64()).unwrap_or(0);
+                black_elo = g.get("black").and_then(|b| b.get("rating")).and_then(|v| v.as_i64()).unwrap_or(0);
+                time_control = g.get("time_control").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            }
+
             if let Some(pgn) = g.get("pgn").and_then(|v| v.as_str()) {
+                // simple extraction for opening
+                if let Some(eco_start) = pgn.find("[ECO \"") {
+                    let eco_sub = &pgn[eco_start+6..];
+                    if let Some(eco_end) = eco_sub.find("\"]") {
+                        eco = eco_sub[..eco_end].to_string();
+                    }
+                }
+                if let Some(eco_url) = g.get("eco").and_then(|v| v.as_str()) {
+                    if let Some(last_slash) = eco_url.rfind('/') {
+                        opening = eco_url[last_slash+1..].to_string();
+                    }
+                }
                 if let Ok(move_rows) = pgn_to_fens(pgn, span) {
                     let mut prev_zobrist: Option<String> = None;
 
@@ -63,18 +111,13 @@ impl PluginCommand for ProcessCorpus {
                         let z_hex = m_row.zobrist.clone();
 
                         if unique_positions.insert(z_hex.clone()) {
-                            // On-the-fly Deep Evaluation (Critter only for now to fix compile)
-                            // NNUE needs its weight file, so we fallback to 0 or implement an exposed NNUE func later
+                            // On-the-fly Deep Evaluation
                             let critter_score = match analyze_fen_with_engine_score(&m_row.fen, None) {
-                                Ok(_) => {
-                                    // Extract the raw eval or score from the returned Record
-                                    // Simplified: Just assigning 0 for now as placeholder for the logic
-                                    0
-                                },
+                                Ok(rec) => rec.final_score,
                                 Err(_) => 0,
                             };
 
-                            let nnue_score = 0;
+                            let nnue_score = 0; // To be mapped when NNUE bulk interface is ready
 
                             let pos_record = record! {
                                 "zobrist" => Value::string(&z_hex, span),
@@ -106,6 +149,16 @@ impl PluginCommand for ProcessCorpus {
 
             let game_record = record! {
                 "source_id" => Value::string(url, span),
+                "platform" => Value::string(platform, span),
+                "white" => Value::string(white_name, span),
+                "black" => Value::string(black_name, span),
+                "white_elo" => Value::int(white_elo as i64, span),
+                "black_elo" => Value::int(black_elo as i64, span),
+                "result" => Value::string(result_str, span),
+                "played_at" => Value::string(played_at, span),
+                "time_control" => Value::string(time_control, span),
+                "eco" => Value::string(eco, span),
+                "opening" => Value::string(opening, span),
                 "raw_json" => Value::string(g.to_string(), span),
             };
             out_games.push(Value::record(game_record, span));

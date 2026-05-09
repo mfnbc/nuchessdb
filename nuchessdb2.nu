@@ -82,11 +82,11 @@ def sync-chesscom [username: string, --limit: int] {
         | flatten
     )
     
-    import-records $all_games "chesscom"
+    import-records $all_games "chesscom" $username
 }
 
 # --- 2. Batch Ingestion Pipeline (ELT) ---
-def import-records [games: list, platform: string] {
+def import-records [games: list, platform: string, username: string] {
     init-schema | ignore
     let db = (_db_path)
     let temp_db = "./temp_sync.db"
@@ -94,7 +94,7 @@ def import-records [games: list, platform: string] {
     print $"[Engine] Processing ($games | length) games in RAM..."
     
         # 1. Rust does all the math in one pass (We will build this Rust command next)
-        let corpus = ($games | to json | chessdb process-corpus)
+        let corpus = ($games | to json | chessdb process-corpus --username $username)
         
         # 2. Nushell pipes the flat arrays into a temporary database instantly
         rm -f $temp_db
@@ -106,9 +106,9 @@ def import-records [games: list, platform: string] {
         # 3. Single Transaction Merge
         print $"[Database] Merging corpus into ($db)..."
         # Nushell handles ATTACH best via a single command block or by dumping to SQL and importing
-        open $temp_db | query db "SELECT * FROM temp_games;" | into sqlite $db -t games
-        open $temp_db | query db "SELECT * FROM temp_positions;" | into sqlite $db -t positions
-        open $temp_db | query db "SELECT * FROM temp_moves;" | into sqlite $db -t moves
+        open $temp_db | query db "SELECT source_id, platform, white, black, white_elo, black_elo, result, played_at, time_control, eco, opening, raw_json FROM temp_games;" | into sqlite $db -t games
+        open $temp_db | query db "SELECT zobrist, fen, critter_score, nnue_score FROM temp_positions;" | into sqlite $db -t positions
+        open $temp_db | query db "SELECT game_id, position_id, next_position_id, ply, move_number, color, san, uci FROM temp_moves;" | into sqlite $db -t moves
         
         rm -f $temp_db
         print "✓ Batch merge complete."
