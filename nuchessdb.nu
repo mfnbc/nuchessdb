@@ -57,6 +57,7 @@ def main [...args] {
         print $"Syncing latest ($platform) archive for ($username) with Critter evaluation (smoketest mode)..."
       } else {
         print $"Syncing all ($platform) archives for ($username) with Critter evaluation..."
+        print "(Previously synced archives will be skipped automatically)"
       }
       
       init-db | ignore
@@ -75,8 +76,11 @@ def main [...args] {
           print "No games found or sync failed"
           return
         }
+        let total_archives = ($result.archives | length)
         let imported_count = ($result.archives | where skipped == false | length)
-        print $"✓ Imported ($imported_count) archives"
+        let skipped_count = ($result.archives | where skipped == true | length)
+        
+        print $"✓ Processed ($total_archives) archives: ($imported_count) imported, ($skipped_count) already in database"
       }
 
       # Always run critter eval
