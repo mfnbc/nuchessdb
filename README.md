@@ -26,8 +26,11 @@ nu nuchessdb.nu init
 
 **Option A: Sync from chess.com/lichess**
 ```sh
-# Download all games with Critter decomposed evaluation
+# Download ALL games with Critter decomposed evaluation
 nu nuchessdb.nu sync chesscom <your-username>
+
+# Or test with just the latest archive first
+nu nuchessdb.nu sync chesscom <your-username> --smoketest
 ```
 
 **Option B: Import from PGN file**
@@ -36,7 +39,7 @@ nu nuchessdb.nu sync chesscom <your-username>
 nu nuchessdb.nu import ./data/my_games.pgn chesscom
 ```
 
-**Note:** All imports automatically include Critter evaluation for position analysis.
+**Note:** All imports automatically include Critter evaluation for position analysis. By default, sync downloads ALL game archives (this may take time for accounts with many games).
 
 ### 4. Analyze Your Games
 ```sh

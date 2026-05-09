@@ -37,32 +37,47 @@ def main [...args] {
 
     "sync" => {
       if ($rest | length) < 2 {
-        print "Usage: nu nuchessdb.nu sync <platform> <username>"
+        print "Usage: nu nuchessdb.nu sync <platform> <username> [--smoketest]"
         print "Example: nu nuchessdb.nu sync chesscom hikaru"
+        print "         nu nuchessdb.nu sync chesscom hikaru --smoketest  (latest archive only)"
         return
       }
 
       let platform = $rest.0
       let username = $rest.1
+      let smoketest = ($rest | any { |arg| $arg == "--smoketest" })
 
       if $platform != "chesscom" and $platform != "lichess" {
         print $"Error: platform must be 'chesscom' or 'lichess', got '($platform)'"
         return
       }
 
-      print $"Syncing ($platform) games for ($username) with Critter evaluation..."
+      let mode = if $smoketest { "latest" } else { "all" }
+      if $smoketest {
+        print $"Syncing latest ($platform) archive for ($username) with Critter evaluation (smoketest mode)..."
+      } else {
+        print $"Syncing all ($platform) archives for ($username) with Critter evaluation..."
+      }
+      
       init-db | ignore
 
-      # Sync all archives
-      let result = (sync-games [$platform "all" $username])
+      # Sync archives (all or just latest)
+      let result = (sync-games [$platform $mode $username])
       
-      if ($result.archives | is-empty) {
-        print "No games found or sync failed"
-        return
+      if $smoketest {
+        if ($result.archive | get -o skipped | default false) {
+          print "Archive skipped or not found"
+          return
+        }
+        print "✓ Imported latest archive"
+      } else {
+        if ($result.archives | is-empty) {
+          print "No games found or sync failed"
+          return
+        }
+        let imported_count = ($result.archives | where skipped == false | length)
+        print $"✓ Imported ($imported_count) archives"
       }
-
-      let imported_count = ($result.archives | where skipped == false | length)
-      print $"✓ Imported ($imported_count) archives"
 
       # Always run critter eval
       print "Running Critter evaluation on new positions..."
@@ -175,7 +190,7 @@ USAGE:
 
 COMMANDS:
   init                             Initialize database and schema
-  sync <platform> <username>       Download and import games with Critter eval
+  sync <platform> <username>       Download ALL games with Critter eval
   import <path.pgn> <platform>     Import PGN file with Critter eval
   status                           Show database overview
   report [limit]                   Position performance report (default: 20)
@@ -186,15 +201,23 @@ COMMANDS:
   eco-classify [limit]             Top positions with ECO names (default: 20)
   help                             Show this help message
 
+FLAGS:
+  --smoketest                      Sync only the latest archive (for testing)
+
 NOTE:
   All import operations automatically include Critter decomposed evaluation.
+  By default, 'sync' downloads ALL game archives. This may take time for
+  accounts with many games. Use --smoketest to test with just the latest archive.
 
 EXAMPLES:
   # Initialize database
   nu nuchessdb.nu init
 
-  # Sync all games from chess.com (includes Critter evaluation)
+  # Sync ALL games from chess.com (includes Critter evaluation)
   nu nuchessdb.nu sync chesscom hikaru
+
+  # Quick test with just the latest archive
+  nu nuchessdb.nu sync chesscom hikaru --smoketest
 
   # Import a PGN file (includes Critter evaluation)
   nu nuchessdb.nu import ./data/games.pgn chesscom
