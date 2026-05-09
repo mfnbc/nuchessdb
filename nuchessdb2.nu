@@ -111,10 +111,10 @@ def import-records [games: list, platform: string] {
 }
 
 # --- 3. Analytics & Intelligence ---
-def analyze-position [fen: string] {
+def analyze-position [fen: string, weights_path: string = "./weights.json"] {
     # Calls the resurrected Rust engine modules
     let critter = ($fen | chessdb critter-eval)
-    let nnue = ($fen | chessdb nnue-eval)
+    let nnue = ($fen | chessdb nnue-eval --weights $weights_path)
     { critter: $critter, nnue: $nnue }
 }
 
