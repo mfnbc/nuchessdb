@@ -169,6 +169,16 @@ def main [...args] {
             if ($rest | is-empty) { print "Provide the game's source_id (URL)"; return }
             review-game $rest.0 | table
         }
+        "recent" => {
+            let limit = if ($rest | is-empty) { 5 } else { ($rest.0 | into int) }
+            let db = (_db_path)
+            open $db | query db "
+                SELECT played_at, white, black, result, opening, source_id 
+                FROM games 
+                ORDER BY played_at DESC 
+                LIMIT ?
+            " --params [$limit] | table
+        }
         "status" => {
             let db = (_db_path)
             open $db | query db "SELECT (SELECT COUNT(*) FROM games) as g, (SELECT COUNT(*) FROM positions) as p, (SELECT COUNT(*) FROM moves) as m" | table
@@ -184,6 +194,7 @@ def print-help [] {
 COMMANDS:
   init              Initialize relational analytics engine
   sync <user>       Stream games from chess.com
+  recent [n]        List the n most recent games and their IDs (default 5)
   explore <zobrist> Show move frequencies and ELO performance for a position
   review <game_id>  Show move-by-move engine evaluations for a specific game
   status            Platform health and data counts"
