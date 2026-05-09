@@ -41,6 +41,7 @@ def init-schema [] {
             zobrist TEXT PRIMARY KEY,
             fen TEXT UNIQUE,
             critter_score INTEGER,
+            critter_json TEXT,
             nnue_score INTEGER,
             eval_depth INTEGER,
             is_theoretical BOOLEAN DEFAULT 0,
@@ -107,7 +108,7 @@ def import-records [games: list, platform: string, username: string] {
         print $"[Database] Merging corpus into ($db)..."
         # Nushell handles ATTACH best via a single command block or by dumping to SQL and importing
         open $temp_db | query db "SELECT source_id, platform, white, black, white_elo, black_elo, result, played_at, time_control, eco, opening, raw_json FROM temp_games;" | into sqlite $db -t games
-        open $temp_db | query db "SELECT zobrist, fen, critter_score, nnue_score FROM temp_positions;" | into sqlite $db -t positions
+        open $temp_db | query db "SELECT zobrist, fen, critter_score, critter_json, nnue_score FROM temp_positions;" | into sqlite $db -t positions
         open $temp_db | query db "SELECT game_id, position_id, next_position_id, ply, move_number, color, san, uci FROM temp_moves;" | into sqlite $db -t moves
         
         rm -f $temp_db
@@ -143,8 +144,8 @@ def review-game [game_id: string] {
             m.move_number, 
             m.color, 
             m.san, 
-            p.critter_score, 
-            p.nnue_score 
+            p.critter_score,
+            p.critter_json
         FROM moves m
         JOIN positions p ON m.next_position_id = p.zobrist
         WHERE m.game_id = ?

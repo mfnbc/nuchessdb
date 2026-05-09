@@ -112,9 +112,13 @@ impl PluginCommand for ProcessCorpus {
 
                         if unique_positions.insert(z_hex.clone()) {
                             // On-the-fly Deep Evaluation
-                            let critter_score = match analyze_fen_with_engine_score(&m_row.fen, None) {
-                                Ok(rec) => rec.final_score,
-                                Err(_) => 0,
+                            let (critter_score, critter_json) = match analyze_fen_with_engine_score(&m_row.fen, None) {
+                                Ok(rec) => {
+                                    // Serialize the entire decomposed struct to JSON
+                                    let json_str = serde_json::to_string(&rec).unwrap_or_else(|_| "{}".to_string());
+                                    (rec.final_score, json_str)
+                                },
+                                Err(_) => (0, "{}".to_string()),
                             };
 
                             let nnue_score = 0; // To be mapped when NNUE bulk interface is ready
@@ -123,6 +127,7 @@ impl PluginCommand for ProcessCorpus {
                                 "zobrist" => Value::string(&z_hex, span),
                                 "fen" => Value::string(&m_row.fen, span),
                                 "critter_score" => Value::int(critter_score as i64, span),
+                                "critter_json" => Value::string(&critter_json, span),
                                 "nnue_score" => Value::int(nnue_score as i64, span),
                             };
                             out_positions.push(Value::record(pos_record, span));
