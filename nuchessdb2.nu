@@ -79,7 +79,19 @@ def sync-chesscom [username: string, --limit: int] {
     let all_games = (
         $target_archives 
         | par-each { |url| 
-            try { (http get $url).games } catch { [] }
+            let attempt1 = (try { (http get $url).games } catch { null })
+            if ($attempt1 != null) {
+                $attempt1
+            } else {
+                sleep 5sec
+                let attempt2 = (try { (http get $url).games } catch { null })
+                if ($attempt2 != null) {
+                    $attempt2
+                } else {
+                    sleep 5sec
+                    try { (http get $url).games } catch { [] }
+                }
+            }
         } 
         | flatten
     )
