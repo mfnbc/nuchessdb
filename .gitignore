@@ -2,3 +2,9 @@ data/*.sqlite
 data/raw/
 nu_plugin_chessdb/target/
 tmp/
+chess.db
+chess.db-shm
+chess.db-wal
+temp_sync.db
+temp_sync.db-shm
+temp_sync.db-wal
