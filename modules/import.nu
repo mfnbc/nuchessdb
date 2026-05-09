@@ -48,89 +48,83 @@ export def bulk-insert-moves [rows: list<record>] {
 }
 
 export def calculate-stats-stmts [edges: list<record>] {
-  # Position Stats
-  let pos_stats = ($edges | group-by to_hash | items { |hash, group|
-    let w_wins = ($group | where result == "1-0" | length)
-    let b_wins = ($group | where result == "0-1" | length)
-    let draws  = ($group | where result == "1/2-1/2" | length)
-    let total  = ($group | length)
-    
-    let me_wins = ($group | where { |r| ($r.is_me_white and $r.result == "1-0") or ($r.is_me_black and $r.result == "0-1") } | length)
-    let me_losses = ($group | where { |r| ($r.is_me_white and $r.result == "0-1") or ($r.is_me_black and $r.result == "1-0") } | length)
-    let me_draws = ($group | where { |r| ($r.is_me_white or $r.is_me_black) and $r.result == "1/2-1/2" } | length)
-    let me_total = ($me_wins + $me_losses + $me_draws)
+  let chunk_size = 500
 
-    let h_val = $hash
-    let w_val = ($w_wins | into string)
-    let d_val = ($draws | into string)
-    let b_val = ($b_wins | into string)
-    let t_val = ($total | into string)
-    let mw_val = ($me_wins | into string)
-    let md_val = ($me_draws | into string)
-    let ml_val = ($me_losses | into string)
-    let mt_val = ($me_total | into string)
+  # Flatten all edges into SQL values for position_color_stats
+  let pos_stmts = ($edges | chunks-of $chunk_size | each { |chunk|
+    let values = ($chunk | each { |e|
+      let w_wins = if $e.result == "1-0" { "1" } else { "0" }
+      let b_wins = if $e.result == "0-1" { "1" } else { "0" }
+      let draws = if $e.result == "1/2-1/2" { "1" } else { "0" }
+      let is_mw = ($e.is_me_white and $e.result == "1-0") or ($e.is_me_black and $e.result == "0-1")
+      let mw_val = if $is_mw { "1" } else { "0" }
+      let is_ml = ($e.is_me_white and $e.result == "0-1") or ($e.is_me_black and $e.result == "1-0")
+      let ml_val = if $is_ml { "1" } else { "0" }
+      let is_md = ($e.is_me_white or $e.is_me_black) and $e.result == "1/2-1/2"
+      let md_val = if $is_md { "1" } else { "0" }
+      let is_mt = $e.is_me_white or $e.is_me_black
+      let mt_val = if $is_mt { "1" } else { "0" }
+
+      [
+        "((SELECT id FROM positions WHERE canonical_hash = '", $e.to_hash, "'),",
+        $w_wins, ",", $draws, ",", $b_wins, ",1,", $mw_val, ",", $md_val, ",", $ml_val, ",", $mt_val, ")"
+      ] | str join
+    } | str join ",")
 
     [
-      "INSERT INTO position_color_stats (position_id, white_wins, draws, black_wins, occurrences, me_wins, me_draws, me_losses, me_occurrences) VALUES ("
-      "(SELECT id FROM positions WHERE canonical_hash = '", $h_val, "'),"
-      $w_val, "," $d_val, "," $b_val, "," $t_val, "," $mw_val, "," $md_val, "," $ml_val, "," $mt_val, ")"
-      " ON CONFLICT(position_id) DO UPDATE SET "
-      "white_wins = white_wins + excluded.white_wins, "
-      "draws = draws + excluded.draws, "
-      "black_wins = black_wins + excluded.black_wins, "
-      "occurrences = occurrences + excluded.occurrences, "
-      "me_wins = me_wins + excluded.me_wins, "
-      "me_draws = me_draws + excluded.me_draws, "
-      "me_losses = me_losses + excluded.me_losses, "
+      "INSERT INTO position_color_stats (position_id, white_wins, draws, black_wins, occurrences, me_wins, me_draws, me_losses, me_occurrences) VALUES ",
+      $values,
+      " ON CONFLICT(position_id) DO UPDATE SET ",
+      "white_wins = white_wins + excluded.white_wins, ",
+      "draws = draws + excluded.draws, ",
+      "black_wins = black_wins + excluded.black_wins, ",
+      "occurrences = occurrences + excluded.occurrences, ",
+      "me_wins = me_wins + excluded.me_wins, ",
+      "me_draws = me_draws + excluded.me_draws, ",
+      "me_losses = me_losses + excluded.me_losses, ",
       "me_occurrences = me_occurrences + excluded.me_occurrences;"
     ] | str join
   })
 
-  # Move Stats
-  let move_stats = ($edges | group-by { |e| $e.from_hash + $e.to_hash + $e.uci } | items { |key, group|
-    let first = ($group | first)
-    let w_wins = ($group | where result == "1-0" | length)
-    let b_wins = ($group | where result == "0-1" | length)
-    let draws  = ($group | where result == "1/2-1/2" | length)
-    let total  = ($group | length)
+  # Flatten all edges into SQL values for move_stats
+  let move_stmts = ($edges | chunks-of $chunk_size | each { |chunk|
+    let values = ($chunk | each { |e|
+      let w_wins = if $e.result == "1-0" { "1" } else { "0" }
+      let b_wins = if $e.result == "0-1" { "1" } else { "0" }
+      let draws = if $e.result == "1/2-1/2" { "1" } else { "0" }
+      let is_mw = ($e.is_me_white and $e.result == "1-0") or ($e.is_me_black and $e.result == "0-1")
+      let mw_val = if $is_mw { "1" } else { "0" }
+      let is_ml = ($e.is_me_white and $e.result == "0-1") or ($e.is_me_black and $e.result == "1-0")
+      let ml_val = if $is_ml { "1" } else { "0" }
+      let is_md = ($e.is_me_white or $e.is_me_black) and $e.result == "1/2-1/2"
+      let md_val = if $is_md { "1" } else { "0" }
+      let is_mt = $e.is_me_white or $e.is_me_black
+      let mt_val = if $is_mt { "1" } else { "0" }
 
-    let me_wins = ($group | where { |r| ($r.is_me_white and $r.result == "1-0") or ($r.is_me_black and $r.result == "0-1") } | length)
-    let me_losses = ($group | where { |r| ($r.is_me_white and $r.result == "0-1") or ($r.is_me_black and $r.result == "1-0") } | length)
-    let me_draws = ($group | where { |r| ($r.is_me_white or $r.is_me_black) and $r.result == "1/2-1/2" } | length)
-    let me_total = ($me_wins + $me_losses + $me_draws)
-
-    let from_hash = $first.from_hash
-    let to_hash = $first.to_hash
-    let uci = $first.uci
-
-    let w_val = ($w_wins | into string)
-    let b_val = ($b_wins | into string)
-    let d_val = ($draws | into string)
-    let t_val = ($total | into string)
-    let mw_val = ($me_wins | into string)
-    let ml_val = ($me_losses | into string)
-    let md_val = ($me_draws | into string)
-    let mt_val = ($me_total | into string)
+      [
+        "((SELECT id FROM moves WHERE from_position_id = (SELECT id FROM positions WHERE canonical_hash = '", $e.from_hash, "')",
+        " AND to_position_id = (SELECT id FROM positions WHERE canonical_hash = '", $e.to_hash, "')",
+        " AND move_uci = '", $e.uci, "'),",
+        $w_wins, ",", $draws, ",", $b_wins, ",1,", $mw_val, ",", $md_val, ",", $ml_val, ",", $mt_val, ")"
+      ] | str join
+    } | str join ",")
 
     [
-      "INSERT INTO move_stats (move_id, white_wins, draws, black_wins, occurrences, me_wins, me_draws, me_losses, me_occurrences) VALUES ("
-      "(SELECT id FROM moves WHERE from_position_id = (SELECT id FROM positions WHERE canonical_hash = '", $from_hash, "')"
-      " AND to_position_id = (SELECT id FROM positions WHERE canonical_hash = '", $to_hash, "')"
-      " AND move_uci = '", $uci, "'),"
-      $w_val, "," $d_val, "," $b_val, "," $t_val, "," $mw_val, "," $md_val, "," $ml_val, "," $mt_val, ")"
-      " ON CONFLICT(move_id) DO UPDATE SET "
-      "white_wins = white_wins + excluded.white_wins, "
-      "draws = draws + excluded.draws, "
-      "black_wins = black_wins + excluded.black_wins, "
-      "occurrences = occurrences + excluded.occurrences, "
-      "me_wins = me_wins + excluded.me_wins, "
-      "me_draws = me_draws + excluded.me_draws, "
-      "me_losses = me_losses + excluded.me_losses, "
+      "INSERT INTO move_stats (move_id, white_wins, draws, black_wins, occurrences, me_wins, me_draws, me_losses, me_occurrences) VALUES ",
+      $values,
+      " ON CONFLICT(move_id) DO UPDATE SET ",
+      "white_wins = white_wins + excluded.white_wins, ",
+      "draws = draws + excluded.draws, ",
+      "black_wins = black_wins + excluded.black_wins, ",
+      "occurrences = occurrences + excluded.occurrences, ",
+      "me_wins = me_wins + excluded.me_wins, ",
+      "me_draws = me_draws + excluded.me_draws, ",
+      "me_losses = me_losses + excluded.me_losses, ",
       "me_occurrences = me_occurrences + excluded.me_occurrences;"
     ] | str join
   })
 
-  $pos_stats | append $move_stats
+  $pos_stmts | append $move_stmts
 }
 
 def account-upsert-sql [platform: string, username: string, is_me: bool] {
