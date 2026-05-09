@@ -188,28 +188,38 @@ export def import-pgn-file [path: string, platform: string] {
     ]
   } | flatten | where { |s| not ($s | is-empty) } | uniq)
 
-  let game_stmts = ($batch.games | each { |g|
-    let headers = (headers-list-to-record $g.headers)
-    let white = ($headers | get -o White | default "")
-    let black = ($headers | get -o Black | default "")
-    
-    # Path hashes are already pre-computed in the moves array!
-    let move_hashes = ($g.moves | get zobrist)
-    let path_hashes = ([$initial_hash] | append $move_hashes)
-    let source_game_id = $"($path)#($g.game_index)"
-    
-    let white_q = (sql-string $white)
-    let black_q = (sql-string $black)
-    let platform_q = (sql-string $platform)
-    let res_q = (sql-string $g.result)
-    let src_q = (sql-string $source_game_id)
-    let pgn_q = (sql-string $text)
-    let path_q = (sql-string ($path_hashes | to json))
+  let game_stmts = ($batch.games | chunks-of $chunk_size | each { |chunk|
+    let values = ($chunk | each { |g|
+      let headers = (headers-list-to-record $g.headers)
+      let white = ($headers | get -o White | default "")
+      let black = ($headers | get -o Black | default "")
+      
+      # Path hashes are already pre-computed in the moves array!
+      let move_hashes = ($g.moves | get zobrist)
+      let path_hashes = ([$initial_hash] | append $move_hashes)
+      let source_game_id = $"($path)#($g.game_index)"
+      
+      let white_q = (sql-string $white)
+      let black_q = (sql-string $black)
+      let platform_q = (sql-string $platform)
+      let res_q = (sql-string $g.result)
+      let src_q = (sql-string $source_game_id)
+      let pgn_q = (sql-string $text)
+      let path_q = (sql-string ($path_hashes | to json))
 
-    let white_account = if ($white | is-empty) { "NULL" } else { "(SELECT id FROM accounts WHERE platform = " + $platform_q + " AND username = " + $white_q + ")" }
-    let black_account = if ($black | is-empty) { "NULL" } else { "(SELECT id FROM accounts WHERE platform = " + $platform_q + " AND username = " + $black_q + ")" }
+      let white_account = if ($white | is-empty) { "NULL" } else { "(SELECT id FROM accounts WHERE platform = " + $platform_q + " AND username = " + $white_q + ")" }
+      let black_account = if ($black | is-empty) { "NULL" } else { "(SELECT id FROM accounts WHERE platform = " + $platform_q + " AND username = " + $black_q + ")" }
 
-    ["INSERT INTO games (platform, source_game_id, white_account_id, black_account_id, result, raw_pgn, path_json, imported_at) VALUES (", $platform_q, ",", $src_q, ",", $white_account, ",", $black_account, ",", $res_q, ",", $pgn_q, ",", $path_q, ", datetime('now')) ON CONFLICT DO NOTHING;"] | str join
+      [
+        "(", $platform_q, ",", $src_q, ",", $white_account, ",", $black_account, ",", $res_q, ",", $pgn_q, ",", $path_q, ", datetime('now'))"
+      ] | str join
+    } | str join ",")
+
+    [
+      "INSERT INTO games (platform, source_game_id, white_account_id, black_account_id, result, raw_pgn, path_json, imported_at) VALUES ",
+      $values,
+      " ON CONFLICT DO NOTHING;"
+    ] | str join
   })
   
   run-sql $db_path ($account_stmts | append $game_stmts | where { |s| not ($s | is-empty) })
