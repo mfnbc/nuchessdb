@@ -132,7 +132,6 @@ def sync-chesscom-all [username: string] {
   let archives = (load-chesscom-archives $username)
   if $archives == null { return { username: $username, reason: 'archives unavailable' } }
   let total = ($archives.archives | length)
-  mut state = (load-sync-state $username)
   mut results = []
 
   for it in ($archives.archives | enumerate) {
@@ -140,26 +139,16 @@ def sync-chesscom-all [username: string] {
     let n = ($it.index + 1)
     let archive_id = ($archive_url | split row '/' | last 2 | str join '/')
     let is_last = ($n == $total)
-    let completed = ($state.completed_archives | default [])
-    let is_completed = ($completed | any { |a| $a == $archive_id })
 
-    if $is_completed and not $is_last {
-      $results = ($results | append { archive_url: $archive_url, archive_id: $archive_id, skipped: true, reason: 'already completed' })
+    print $'sync: chesscom all ($username) ($n)/($total) ($archive_id)'
+    
+    # Always try to get/download the PGN (will use cache if available)
+    let saved = (save-archive-pgn $username $archive_url $is_last)
+    if $saved == null {
+      $results = ($results | append { archive_url: $archive_url, archive_id: $archive_id, skipped: true, reason: 'no pgn found' })
     } else {
-      print $'sync: chesscom all ($username) ($n)/($total) ($archive_id)'
-      $state = ($state | upsert current_archive $archive_id)
-      save-sync-state $username $state | ignore
-      let saved = (save-archive-pgn $username $archive_url $is_last)
-      if $saved == null {
-        $state = (update-sync-state $state $archive_id false ((date now) | into string))
-        save-sync-state $username $state | ignore
-        $results = ($results | append { archive_url: $archive_url, archive_id: $archive_id, skipped: true, reason: 'no pgn found' })
-      } else {
-        let imported = (import-pgn-file $saved.file "chesscom")
-        $state = (update-sync-state $state $archive_id true ((date now) | into string))
-        save-sync-state $username $state | ignore
-        $results = ($results | append { archive_url: $archive_url, archive_id: $archive_id, skipped: false, saved: $saved, imported: $imported })
-      }
+      let imported = (import-pgn-file $saved.file "chesscom")
+      $results = ($results | append { archive_url: $archive_url, archive_id: $archive_id, skipped: false, saved: $saved, imported: $imported })
     }
   }
   $results
