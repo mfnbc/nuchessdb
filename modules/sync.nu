@@ -3,14 +3,15 @@ use ./db.nu *
 use ./import.nu *
 
 def sync-state-path [username: string] {
-  $'./tmp/sync-progress-($username).nuon'
+  $'./tmp/sync-progress-().nuon'
 }
 
 def default-sync-state [username: string] {
   {
     provider: 'chesscom'
-    username: $username
+    username: 
     completed_archives: []
+    # missing_archives is now a list of records: { archive_id: string, retries: int }
     missing_archives: []
     current_archive: null
     updated_at: null
@@ -18,7 +19,7 @@ def default-sync-state [username: string] {
 }
 
 def load-sync-state [username: string] {
-  let path = (sync-state-path $username)
+  let path = (sync-state-path )
   if ($path | path exists) {
     let state = (open $path)
     {
@@ -41,38 +42,41 @@ def save-sync-state [username: string, state: record] {
   $state
 }
 
+# Updates the sync state after an archive attempt.
+# if imported is true, it moves the archive to completed.
+# if imported is false, it increments retry count or stays in missing.
 def update-sync-state [state: record, archive_id: string, imported: bool, now: string] {
   let current_completed = ($state.completed_archives | default [])
   let current_missing = ($state.missing_archives | default [])
 
   if $imported {
-    let remaining_missing = ($current_missing | where { |a| $a != $archive_id })
+    let remaining_missing = ($current_missing | where { |a| 
+      (if ($a | describe) == "string" { $a } else { $a.archive_id }) != $archive_id 
+    })
     $state
     | upsert completed_archives ($current_completed | append $archive_id | uniq)
     | upsert missing_archives $remaining_missing
     | upsert current_archive null
     | upsert updated_at $now
   } else {
+    # Check if already in missing_archives as a record
+    let existing = ($current_missing | where { |a| (if ($a | describe) == "string" { $a } else { $a.archive_id }) == $archive_id } | first)
+    let retries = if ($existing | is-empty) { 
+        1 
+    } else if ($existing | describe) == "string" {
+        1
+    } else {
+        $existing.retries + 1
+    }
+
+    let other_missing = ($current_missing | where { |a| (if ($a | describe) == "string" { $a } else { $a.archive_id }) != $archive_id })
+    let new_missing = ($other_missing | append { archive_id: $archive_id, retries: $retries })
+
     $state
-    | upsert missing_archives ($current_missing | append $archive_id | uniq)
+    | upsert missing_archives $new_missing
     | upsert current_archive null
     | upsert updated_at $now
   }
-}
-
-def clear-chesscom-sync-state [username: string] {
-  let state_path = (sync-state-path $username)
-  let raw_dir = $'./data/raw/chesscom/($username)'
-
-  if ($state_path | path exists) {
-    rm $state_path
-  }
-
-  if ($raw_dir | path exists) {
-    rm -r $raw_dir
-  }
-
-  { username: $username, state_removed: $state_path, raw_removed: $raw_dir }
 }
 
 export def clean-sync-cache [] {
@@ -105,28 +109,25 @@ def load-chesscom-archives [username: string] {
 
 def latest-chesscom-archive [username: string] {
   let archives = (load-chesscom-archives $username)
-
-  if $archives == null {
-    return null
-  }
-
+  if $archives == null { return null }
   let url = ($archives.archives | last)
-
-  if $url == null {
-    error make { msg: $'no chess.com archives found for ($username)' }
-  }
-
+  if $url == null { error make { msg: $'no chess.com archives found for ($username)' } }
   $url
 }
 
-def save-archive-pgn [username: string, archive_url: string] {
-  let fixture_mode = ($env | get -o NUCHESSDB_TEST_PGN_MODE | default "")
+def save-archive-pgn [username: string, archive_url: string, force_download: bool = false] {
+  let archive_id = ($archive_url | split row "/" | last 2 | str join "-")
+  let out_dir = $'./data/raw/chesscom/($username)'
+  let out_file = $'($out_dir)/($archive_id).pgn'
 
+  if not $force_download and ($out_file | path exists) {
+    print $'sync: using cached ($out_file)'
+    return { archive_url: $archive_url, pgn_url: $'($archive_url)/pgn', file: $out_file, cached: true }
+  }
+
+  let fixture_mode = ($env | get -o NUCHESSDB_TEST_PGN_MODE | default "")
   if $fixture_mode == "fixture" or $fixture_mode == "fixture-ready" {
-    let archive_id = ($archive_url | split row "/" | last 2 | str join "-")
     let month = ($archive_url | split row "/" | last 2 | str join "/")
-    let out_dir = $'./data/raw/chesscom/($username)'
-    let out_file = $'($out_dir)/($archive_id).pgn'
     let fixture = ($env | get -o NUCHESSDB_TEST_PGN_FIXTURE | default './test-fixtures/chesscom/hikaru-game.pgn')
 
     if $fixture_mode == "fixture" and $month == '2024/03' {
@@ -135,33 +136,28 @@ def save-archive-pgn [username: string, archive_url: string] {
     } else {
       mkdir $out_dir
       open $fixture | save --force $out_file
-      { archive_url: $archive_url, pgn_url: $'($archive_url)/pgn', file: $out_file }
+      { archive_url: $archive_url, pgn_url: $'($archive_url)/pgn', file: $out_file, cached: false }
     }
   } else {
-  let archive_id = ($archive_url | split row "/" | last 2 | str join "-")
-  let pgn_url = $'($archive_url)/pgn'
-  let out_dir = $'./data/raw/chesscom/($username)'
-  let out_file = $'($out_dir)/($archive_id).pgn'
-  let raw_pgn = (try { http get $pgn_url } catch {
-    print $'sync: chesscom archive ($archive_id) no pgn found, skipping'
-    null
-  })
+    let pgn_url = $'($archive_url)/pgn'
+    let raw_pgn = (try { http get $pgn_url } catch {
+      print $'sync: chesscom archive ($archive_id) no pgn found, skipping'
+      null
+    })
 
-  if $raw_pgn == null {
-    return null
-  }
+    if $raw_pgn == null { return null }
 
-  mkdir $out_dir
-  $raw_pgn | save --force $out_file
-
-  { archive_url: $archive_url, pgn_url: $pgn_url, file: $out_file }
+    mkdir $out_dir
+    $raw_pgn | save --force $out_file
+    { archive_url: $archive_url, pgn_url: $pgn_url, file: $out_file, cached: false }
   }
 }
 
 def sync-chesscom-latest [username: string] {
   print $'sync: chesscom latest ($username)'
   let archive_url = (latest-chesscom-archive $username)
-  let saved = (save-archive-pgn $username $archive_url)
+  # Always force download for the latest month as it's likely incomplete
+  let saved = (save-archive-pgn $username $archive_url true)
 
   if $saved == null {
     { archive_url: $archive_url, skipped: true, reason: 'no pgn found' }
@@ -186,16 +182,23 @@ def sync-chesscom-all [username: string] {
     let archive_url = $it.item
     let n = ($it.index + 1)
     let archive_id = ($archive_url | split row '/' | last 2 | str join '/')
+    let is_last = ($n == $total)
+    
     let completed = ($state.completed_archives | default [])
+    let is_completed = ($completed | any { |a| $a == $archive_id })
 
-    if ($completed | any { |a| $a == $archive_id }) {
+    # Only skip if completed and NOT the latest month
+    if $is_completed and not $is_last {
       print $'sync: chesscom all ($username) ($n)/($total) skip ($archive_id)'
       $results = ($results | append { archive_url: $archive_url, archive_id: $archive_id, skipped: true })
     } else {
       print $'sync: chesscom all ($username) ($n)/($total) import ($archive_id)'
       $state = ($state | upsert current_archive $archive_id)
       save-sync-state $username $state | ignore
-      let saved = (save-archive-pgn $username $archive_url)
+      
+      # Force download for the latest month
+      let saved = (save-archive-pgn $username $archive_url $is_last)
+      
       if $saved == null {
         $state = (update-sync-state $state $archive_id false ((date now) | into string))
         save-sync-state $username $state | ignore
@@ -213,66 +216,51 @@ def sync-chesscom-all [username: string] {
 }
 
 def sync-chesscom-update [username: string] {
-  let state = (load-sync-state $username)
+  mut state = (load-sync-state $username)
   let missing = ($state.missing_archives | default [])
 
   if ($missing | is-empty) {
     { username: $username, updated: [], skipped: [] }
   } else {
-    let archives = ($missing | each { |archive_id|
+    mut updated_results = []
+    mut skipped_results = []
+
+    for entry in $missing {
+      let archive_id = if ($entry | describe) == "string" { $entry } else { $entry.archive_id }
+      let retries = if ($entry | describe) == "string" { 0 } else { $entry.retries }
+      
+      if $retries >= 3 {
+        print $'sync: giving up on ($archive_id) after ($retries) retries'
+        $skipped_results = ($skipped_results | append { archive_id: $archive_id, skipped: true, reason: 'max retries reached' })
+        continue
+      }
+
       let parts = ($archive_id | split row '/')
       if ($parts | length) != 2 {
-        { archive_id: $archive_id, skipped: true, reason: 'invalid archive id' }
+        $skipped_results = ($skipped_results | append { archive_id: $archive_id, skipped: true, reason: 'invalid archive id' })
       } else {
         let archive_url = $'https://api.chess.com/pub/player/($username)/games/($parts.0)/($parts.1)'
         let saved = (save-archive-pgn $username $archive_url)
 
         if $saved == null {
-          { archive_id: $archive_id, archive_url: $archive_url, skipped: true, reason: 'no pgn found' }
+          $state = (update-sync-state $state $archive_id false ((date now) | into string))
+          save-sync-state $username $state | ignore
+          $skipped_results = ($skipped_results | append { archive_id: $archive_id, archive_url: $archive_url, skipped: true, reason: 'no pgn found' })
         } else {
           let imported = (import-games [$saved.file "chesscom"])
-          { archive_id: $archive_id, archive_url: $archive_url, skipped: false, saved: $saved, imported: $imported }
+          $state = (update-sync-state $state $archive_id true ((date now) | into string))
+          save-sync-state $username $state | ignore
+          $updated_results = ($updated_results | append { archive_id: $archive_id, archive_url: $archive_url, skipped: false, saved: $saved, imported: $imported })
         }
       }
-    })
+    }
 
-    let remaining_missing = ($archives | where skipped == true | get archive_id)
-    let completed = ($state.completed_archives | default [])
-    let finished_state = (
-      $state
-      | upsert completed_archives ($completed | append ($archives | where skipped == false | get archive_id) | uniq)
-      | upsert missing_archives $remaining_missing
-      | upsert current_archive null
-      | upsert updated_at (date now)
-    )
-
-    save-sync-state $username $finished_state | ignore
-    { username: $username, updated: ($archives | where skipped == false), skipped: ($archives | where skipped == true) }
+    { username: $username, updated: $updated_results, skipped: $skipped_results }
   }
 }
 
 export def sync-chesscom-status [username: string] {
   load-sync-state $username
-}
-
-export def sync-state-transition-demo [] {
-  let base = (default-sync-state 'hikaru')
-  let months = ['2024/01' '2024/02' '2024/03' '2024/04' '2024/05']
-  let missing_months = ['2024/02' '2024/04']
-  let stamp = '2026-04-05T00:00:00Z'
-
-  mut after_scanning = $base
-  for month in $months {
-    let is_missing = ($missing_months | any { |m| $m == $month })
-    $after_scanning = (update-sync-state $after_scanning $month (if $is_missing { false } else { true }) $stamp)
-  }
-
-  let after_retry = (update-sync-state $after_scanning '2024/02' true $stamp)
-
-  {
-    scanned: $after_scanning,
-    retried: $after_retry,
-  }
 }
 
 export def sync-games [args: list<string>] {
