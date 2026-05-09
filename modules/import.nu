@@ -164,8 +164,10 @@ export def import-pgn-file [path: string, platform: string] {
   let me_username = (if $platform == "chesscom" { $cfg.identity.me.chesscom } else { $cfg.identity.me.lichess })
   let chunk_size = 400
 
-  # 1. Unique Positions (Stripped)
-  let unique_positions = ($batch.unique_positions | each { |p| { hash: (strip-fen $p.fen | chessdb zobrist), fen: $p.fen } } | uniq-by hash)
+  # 1. Unique Positions (Stripped) - parallel zobrist hashing
+  let unique_positions = ($batch.unique_positions | par-each { |p| 
+    { hash: (strip-fen $p.fen | chessdb zobrist), fen: $p.fen } 
+  } | uniq-by hash)
   let pos_stmts = ($unique_positions | chunks-of $chunk_size | each { |chunk| bulk-insert-positions $chunk })
   run-sql $db_path $pos_stmts
 
@@ -180,8 +182,8 @@ export def import-pgn-file [path: string, platform: string] {
     $account_stmts = ($account_stmts | append (account-upsert-sql $platform $white ($me_username != "" and ($white | str downcase) == ($me_username | str downcase))))
     $account_stmts = ($account_stmts | append (account-upsert-sql $platform $black ($me_username != "" and ($black | str downcase) == ($me_username | str downcase))))
     
-    # Generate path of hashes
-    let path_hashes = ([$initial_hash] | append ($g.moves | each { |m| (strip-fen $m.fen | chessdb zobrist) }))
+    # Generate path of hashes - parallel
+    let path_hashes = ([$initial_hash] | append ($g.moves | par-each { |m| strip-fen $m.fen | chessdb zobrist }))
     let source_game_id = $"($path)#($g.game_index)"
     
     let white_q = (sql-string $white)
