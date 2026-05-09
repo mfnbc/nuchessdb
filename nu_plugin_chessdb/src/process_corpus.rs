@@ -62,6 +62,12 @@ impl PluginCommand for ProcessCorpus {
 
         for g in games_array {
             let url = g.get("url").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let mut game_id_int: i64 = 0;
+            if let Some(last_slash) = url.rfind('/') {
+                if let Ok(parsed_id) = url[last_slash+1..].parse::<i64>() {
+                    game_id_int = parsed_id;
+                }
+            }
             
             // Extract the result relative to the user
             let mut result_str = "unknown".to_string();
@@ -112,13 +118,26 @@ impl PluginCommand for ProcessCorpus {
 
                         if unique_positions.insert(z_hex.clone()) {
                             // On-the-fly Deep Evaluation
-                            let (critter_score, critter_json) = match analyze_fen_with_engine_score(&m_row.fen, None) {
+                            let (critter_score, critter_eval_arr) = match analyze_fen_with_engine_score(&m_row.fen, None) {
                                 Ok(rec) => {
-                                    // Serialize the entire decomposed struct to JSON
-                                    let json_str = serde_json::to_string(&rec).unwrap_or_else(|_| "{}".to_string());
+                                    // Serialize the decomposed groups directly into a flat JSON integer array
+                                    let arr = vec![
+                                        rec.groups.material.blended,
+                                        rec.groups.pawn_structure.blended,
+                                        rec.groups.piece_activity.blended,
+                                        rec.groups.king_safety.blended,
+                                        rec.groups.passed_pawns.blended,
+                                        rec.groups.development.blended,
+                                        rec.groups.vector_features.blended,
+                                        rec.groups.strategic.blended,
+                                        rec.groups.scaling.value as i64,
+                                        rec.groups.drawishness.value as i64,
+                                        rec.groups.override_.value as i64,
+                                    ];
+                                    let json_str = serde_json::to_string(&arr).unwrap_or_else(|_| "[]".to_string());
                                     (rec.final_score, json_str)
                                 },
-                                Err(_) => (0, "{}".to_string()),
+                                Err(_) => (0, "[]".to_string()),
                             };
 
                             let nnue_score = 0; // To be mapped when NNUE bulk interface is ready
@@ -127,7 +146,7 @@ impl PluginCommand for ProcessCorpus {
                                 "zobrist" => Value::string(&z_hex, span),
                                 "fen" => Value::string(&m_row.fen, span),
                                 "critter_score" => Value::int(critter_score as i64, span),
-                                "critter_json" => Value::string(&critter_json, span),
+                                "critter_eval_arr" => Value::string(&critter_eval_arr, span),
                                 "nnue_score" => Value::int(nnue_score as i64, span),
                             };
                             out_positions.push(Value::record(pos_record, span));
@@ -135,7 +154,7 @@ impl PluginCommand for ProcessCorpus {
 
                         if let Some(ref prev_z) = prev_zobrist {
                             let move_record = record! {
-                                "game_id" => Value::string(url, span),
+                                "game_id" => Value::int(game_id_int, span),
                                 "position_id" => Value::string(prev_z, span),
                                 "next_position_id" => Value::string(&z_hex, span),
                                 "ply" => Value::int(m_row.ply as i64, span),
@@ -153,8 +172,8 @@ impl PluginCommand for ProcessCorpus {
             }
 
             let game_record = record! {
-                "source_id" => Value::string(url, span),
-                "platform" => Value::string(platform, span),
+                "game_id" => Value::int(game_id_int, span),
+                "source" => Value::string(platform, span),
                 "white" => Value::string(white_name, span),
                 "black" => Value::string(black_name, span),
                 "white_elo" => Value::int(white_elo as i64, span),
@@ -164,7 +183,6 @@ impl PluginCommand for ProcessCorpus {
                 "time_control" => Value::string(time_control, span),
                 "eco" => Value::string(eco, span),
                 "opening" => Value::string(opening, span),
-                "raw_json" => Value::string(g.to_string(), span),
             };
             out_games.push(Value::record(game_record, span));
         }
