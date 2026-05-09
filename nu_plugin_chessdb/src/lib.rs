@@ -60,6 +60,7 @@ impl Plugin for ChessdbPlugin {
             Box::new(normalize_fen::NormalizeFen),
             Box::new(pgn_to_fens::PgnToBatch),
             Box::new(pgn_to_fens::PgnToFens),
+            Box::new(pgn_to_fens::PgnScan),
             Box::new(san_to_uci::SanToUci),
             Box::new(uci_to_san::UciToSan),
             Box::new(zobrist::Zobrist),

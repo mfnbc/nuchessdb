@@ -3,6 +3,8 @@ use nu_protocol::{Category, LabeledError, PipelineData, Record, Signature, Type,
 
 pub struct PgnToFens;
 
+pub struct PgnScan;
+
 pub struct PgnToBatch;
 
 fn headers_value(items: &[(String, String)], span: nu_protocol::Span) -> Value {
@@ -18,7 +20,70 @@ fn headers_value(items: &[(String, String)], span: nu_protocol::Span) -> Value {
     Value::list(rows, span)
 }
 
-fn move_rows_value(rows: &[crate::core::PgnMoveRow], span: nu_protocol::Span) -> Value {
+fn scan_game_value(game: crate::core::ScanGameRow, span: nu_protocol::Span) -> Value {
+    let mut rec = Record::new();
+    rec.push("game_index", Value::int(game.game_index as i64, span));
+    rec.push("white", Value::string(game.white, span));
+    rec.push("black", Value::string(game.black, span));
+    rec.push("result", Value::string(game.result, span));
+
+    let moves = game
+        .moves
+        .into_iter()
+        .map(|m| {
+            let mut m_rec = Record::new();
+            m_rec.push("from_hash", Value::string(m.from_hash, span));
+            m_rec.push("move_int", Value::int(m.move_int as i64, span));
+            m_rec.push("to_hash", Value::string(m.to_hash, span));
+            m_rec.push("san", Value::string(m.san, span));
+            m_rec.push("uci", Value::string(m.uci, span));
+            Value::record(m_rec, span)
+        })
+        .collect();
+
+    rec.push("moves", Value::list(moves, span));
+    Value::record(rec, span)
+}
+
+impl PluginCommand for PgnScan {
+    type Plugin = crate::ChessdbPlugin;
+
+    fn name(&self) -> &str {
+        "chessdb scan-pgn"
+    }
+
+    fn description(&self) -> &str {
+        "Lightweight scan of a PGN string to extract structural move links and game results."
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::build(self.name())
+            .input_output_types(vec![(
+                Type::String,
+                Type::List(Box::new(Type::Record(vec![].into()))),
+            )])
+            .category(Category::Custom(crate::PLUGIN_CATEGORY.into()))
+    }
+
+    fn run(
+        &self,
+        _plugin: &Self::Plugin,
+        _engine: &EngineInterface,
+        call: &EvaluatedCall,
+        input: PipelineData,
+    ) -> Result<PipelineData, LabeledError> {
+        let pgn_str = input.into_value(call.head)?.as_str()?.to_string();
+        let span = call.head;
+        let games = crate::core::scan_pgn(&pgn_str, span)?;
+        let values: Vec<Value> = games
+            .into_iter()
+            .map(|g| scan_game_value(g, span))
+            .collect();
+        Ok(PipelineData::Value(Value::list(values, span), None))
+    }
+}
+
+fn move_rows_value(rows: &[crate::core::MoveRow], span: nu_protocol::Span) -> Value {
     let rows = rows
         .iter()
         .map(|row| {

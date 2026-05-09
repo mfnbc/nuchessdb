@@ -5,42 +5,9 @@ use ./db.nu *
 # Build a single VALUES row tuple string for bulk critter-eval INSERT.
 # Returns a string like: (42,'name','model','fen',...)
 # Schema mirrors critter-eval/src/position.rs PositionRecord
-def critter-eval-values-row [
+export def critter-eval-values-row [
     position_id: int,
-    eval_record: record<
-        fen: string,
-        normalized_fen: string,
-        side_to_move: string,
-        phase: int,
-        final_score: int,
-        engine_score: any,        # Option<i64> — null when no engine score provided
-        legal: record<
-            is_legal: bool,
-            is_check: bool,
-            is_checkmate: bool,
-            is_stalemate: bool,
-            is_insufficient_material: bool,
-            legal_move_count: int
-        >,
-        groups: record<
-            material:        record<mg: int, eg: int, blended: int, terms: record>,
-            pawn_structure:  record<mg: int, eg: int, blended: int, terms: record>,
-            piece_activity:  record<mg: int, eg: int, blended: int, terms: record>,
-            king_safety:     record<mg: int, eg: int, blended: int, terms: record>,
-            passed_pawns:    record<mg: int, eg: int, blended: int, terms: record>,
-            development:     record<mg: int, eg: int, blended: int, terms: record>,
-            vector_features: record<mg: int, eg: int, blended: int, terms: record>,
-            strategic:       record<mg: int, eg: int, blended: int, terms: record>,
-            scaling:     record<value: int, factor: int>,
-            drawishness: record<value: int, factor: int>,
-            override_:   record<value: int, factor: int>
-        >,
-        checks: record<
-            sum_groups: int,
-            matches_final: bool,
-            delta: any            # Option<i64> — null when no engine score provided
-        >
-    >,
+    eval_record: record,
     cn: string,
     cm: string,
     created_at: string
@@ -81,7 +48,7 @@ def critter-eval-values-row [
 
 # Build a list of bulk INSERT SQL statements (chunked at 400 rows) for critter evals.
 # evals: list of {position_id: int, eval_record: record}
-def bulk-critter-eval-insert-sql [evals: list<record<position_id: int, eval_record: record>>, cn: string, cm: string, created_at: string] {
+export def bulk-critter-eval-insert-sql [evals: list<record<position_id: int, eval_record: record>>, cn: string, cm: string, created_at: string] {
   let conflict_clause = (
     " ON CONFLICT(position_id, critter_name, critter_model) DO UPDATE SET" +
     " normalized_fen=excluded.normalized_fen, phase=excluded.phase," +

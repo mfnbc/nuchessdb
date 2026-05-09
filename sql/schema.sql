@@ -59,6 +59,10 @@ CREATE TABLE IF NOT EXISTS position_color_stats (
   draws INTEGER NOT NULL DEFAULT 0,
   black_wins INTEGER NOT NULL DEFAULT 0,
   occurrences INTEGER NOT NULL DEFAULT 0,
+  me_wins INTEGER NOT NULL DEFAULT 0,
+  me_draws INTEGER NOT NULL DEFAULT 0,
+  me_losses INTEGER NOT NULL DEFAULT 0,
+  me_occurrences INTEGER NOT NULL DEFAULT 0,
   FOREIGN KEY (position_id) REFERENCES positions(id)
 );
 
@@ -94,13 +98,31 @@ CREATE TABLE IF NOT EXISTS position_critter_evals (
   position_id INTEGER NOT NULL,
   critter_name TEXT NOT NULL,
   critter_model TEXT,
+  normalized_fen TEXT,
+  phase INTEGER,
   final_score INTEGER NOT NULL,
+  engine_score INTEGER,
+  legal_is_legal INTEGER,
+  legal_is_check INTEGER,
+  legal_is_checkmate INTEGER,
+  legal_is_stalemate INTEGER,
+  legal_is_insufficient_material INTEGER,
+  legal_move_count INTEGER,
   material_json TEXT,
   pawn_structure_json TEXT,
   piece_activity_json TEXT,
   king_safety_json TEXT,
   passed_pawns_json TEXT,
   development_json TEXT,
+  scaling_value INTEGER,
+  scaling_factor INTEGER,
+  drawishness_value INTEGER,
+  drawishness_factor INTEGER,
+  override_value INTEGER,
+  override_factor INTEGER,
+  checks_sum_groups INTEGER,
+  checks_matches_final INTEGER,
+  checks_delta INTEGER,
   analysis_json TEXT NOT NULL,
   created_at TEXT,
   UNIQUE(position_id, critter_name, critter_model),
@@ -112,8 +134,11 @@ CREATE TABLE IF NOT EXISTS position_critter_eval_queue (
   position_id INTEGER PRIMARY KEY,
   priority INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'pending',
+  source TEXT,
   queued_at TEXT,
+  started_at TEXT,
   finished_at TEXT,
+  last_error TEXT,
   FOREIGN KEY (position_id) REFERENCES positions(id)
 );
 
@@ -121,3 +146,16 @@ CREATE INDEX IF NOT EXISTS idx_moves_from_id ON moves(from_position_id);
 CREATE INDEX IF NOT EXISTS idx_moves_to_id ON moves(to_position_id);
 CREATE INDEX IF NOT EXISTS idx_games_white ON games(white_account_id);
 CREATE INDEX IF NOT EXISTS idx_games_black ON games(black_account_id);
+
+CREATE TABLE IF NOT EXISTS move_stats (
+  move_id INTEGER PRIMARY KEY,
+  white_wins INTEGER NOT NULL DEFAULT 0,
+  draws INTEGER NOT NULL DEFAULT 0,
+  black_wins INTEGER NOT NULL DEFAULT 0,
+  occurrences INTEGER NOT NULL DEFAULT 0,
+  me_wins INTEGER NOT NULL DEFAULT 0,
+  me_draws INTEGER NOT NULL DEFAULT 0,
+  me_losses INTEGER NOT NULL DEFAULT 0,
+  me_occurrences INTEGER NOT NULL DEFAULT 0,
+  FOREIGN KEY (move_id) REFERENCES moves(id)
+);

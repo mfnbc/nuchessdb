@@ -30,14 +30,8 @@ pub struct FenInfoData {
     pub legal_move_count: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MoveRow {
-    pub san: String,
-    pub uci: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PgnMoveRow {
     pub game_index: u32,
     pub ply: u32,
     pub move_number: u32,
@@ -54,7 +48,7 @@ pub struct BatchGameRow {
     pub source_game_id: String,
     pub headers: Vec<(String, String)>,
     pub result: String,
-    pub moves: Vec<PgnMoveRow>,
+    pub moves: Vec<MoveRow>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,9 +69,147 @@ pub struct UniquePositionRow {
 pub struct BatchSummary {
     pub source: String,
     pub games: Vec<BatchGameRow>,
-    pub positions: Vec<PgnMoveRow>,
+    pub positions: Vec<MoveRow>,
     pub unique_positions: Vec<UniquePositionRow>,
     pub collisions: Vec<BatchCollisionRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ScanMoveRow {
+    pub from_hash: String,
+    pub move_int: u16,
+    pub to_hash: String,
+    pub san: String,
+    pub uci: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ScanGameRow {
+    pub game_index: u32,
+    pub result: String,
+    pub white: String,
+    pub black: String,
+    pub moves: Vec<ScanMoveRow>,
+}
+
+pub fn encode_move(mv: &shakmaty::Move) -> u16 {
+    let from = mv.from().map(|s| s as u16).unwrap_or(0);
+    let to = mv.to() as u16;
+    let promo = match mv.promotion() {
+        Some(shakmaty::Role::Knight) => 1,
+        Some(shakmaty::Role::Bishop) => 2,
+        Some(shakmaty::Role::Rook) => 3,
+        Some(shakmaty::Role::Queen) => 4,
+        _ => 0,
+    };
+    (from & 0x3F) | ((to & 0x3F) << 6) | ((promo & 0x07) << 12)
+}
+
+fn get_canonical_hash(pos: &Chess) -> String {
+    let hash: Zobrist64 = pos.zobrist_hash(EnPassantMode::Legal);
+    format!("{:016x}", hash.0)
+}
+
+struct GameVisitor {
+    game_index: u32,
+    headers: Vec<(String, String)>,
+    pos: Chess,
+    rows: Vec<MoveRow>,
+    ply: u32,
+    error: Option<String>,
+}
+
+impl GameVisitor {
+    fn new(game_index: u32, _span: Span) -> Self {
+        Self {
+            game_index,
+            headers: Vec::new(),
+            pos: Chess::default(),
+            rows: Vec::new(),
+            ply: 0,
+            error: None,
+        }
+    }
+}
+
+impl Visitor for GameVisitor {
+    type Result = Vec<MoveRow>;
+
+    fn header(&mut self, key: &[u8], value: RawHeader<'_>) {
+        if let (Ok(key), Ok(value)) = (
+            std::str::from_utf8(key),
+            std::str::from_utf8(value.as_bytes()),
+        ) {
+            self.headers
+                .push((key.to_string(), value.trim_matches('"').to_string()));
+        }
+    }
+    fn end_headers(&mut self) -> Skip {
+        Skip(false)
+    }
+
+    fn san(&mut self, san_plus: SanPlus) {
+        if self.error.is_some() {
+            return;
+        }
+
+        let san_str = san_plus.to_string();
+        let bare = san_str.trim_end_matches(['+', '#']);
+
+        let san: San = match bare.parse() {
+            Ok(s) => s,
+            Err(e) => {
+                self.error = Some(format!("SAN parse error '{bare}': {e}"));
+                return;
+            }
+        };
+
+        let mv = match san.to_move(&self.pos) {
+            Ok(m) => m,
+            Err(e) => {
+                self.error = Some(format!("Illegal move '{bare}': {e}"));
+                return;
+            }
+        };
+
+        let uci = Uci::from_move(&mv, shakmaty::CastlingMode::Standard).to_string();
+
+        let new_pos = match self.pos.clone().play(&mv) {
+            Ok(p) => p,
+            Err(e) => {
+                self.error = Some(format!("Play error: {e}"));
+                return;
+            }
+        };
+
+        let fen = Fen::from_position(new_pos.clone(), EnPassantMode::Legal).to_string();
+        let zobrist: Zobrist64 = new_pos.zobrist_hash(EnPassantMode::Legal);
+        let zobrist = format!("{:016x}", zobrist.0);
+        let move_number = (self.ply / 2) + 1;
+        let color = if self.ply % 2 == 0 { "white" } else { "black" };
+
+        self.rows.push(MoveRow {
+            game_index: self.game_index,
+            ply: self.ply,
+            move_number,
+            color: color.to_string(),
+            san: san_str,
+            uci,
+            fen,
+            zobrist,
+        });
+
+        self.pos = new_pos;
+        self.ply += 1;
+    }
+
+    fn begin_variation(&mut self) -> Skip {
+        Skip(true)
+    }
+
+    fn end_game(&mut self) -> Self::Result {
+        std::mem::take(&mut self.rows)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,9 +242,6 @@ fn play_and_serialize(pos: Chess, mv: &shakmaty::Move) -> Result<String, Labeled
     Ok(Fen::from_position(new_pos, EnPassantMode::Legal).to_string())
 }
 
-// Returns "white" or "black" for the side to move.
-// Note: the `positions` table stores side_to_move as 'w'/'b' (single char);
-// this string is used only in the plugin's JSON output, not in SQL.
 fn side_to_move_string(pos: &Chess) -> String {
     match pos.turn() {
         Color::White => "white",
@@ -337,46 +466,60 @@ pub fn legal_moves(fen_str: &str, span: Span) -> Result<Vec<MoveRow>, LabeledErr
         .legal_moves()
         .iter()
         .map(|mv| MoveRow {
+            game_index: 0,
+            ply: 0,
+            move_number: 0,
+            color: "unknown".into(),
             san: San::from_move(&pos, mv).to_string(),
             uci: Uci::from_move(mv, shakmaty::CastlingMode::Standard).to_string(),
+            fen: "unknown".into(),
+            zobrist: "unknown".into(),
         })
         .collect())
 }
 
-struct GameVisitor {
+struct ScanVisitor {
     game_index: u32,
-    headers: Vec<(String, String)>,
+    white: String,
+    black: String,
+    result: String,
     pos: Chess,
-    rows: Vec<PgnMoveRow>,
-    ply: u32,
+    moves: Vec<ScanMoveRow>,
     error: Option<String>,
 }
 
-impl GameVisitor {
-    fn new(game_index: u32, _span: Span) -> Self {
+impl ScanVisitor {
+    fn new(game_index: u32) -> Self {
         Self {
             game_index,
-            headers: Vec::new(),
+            white: String::new(),
+            black: String::new(),
+            result: "*".to_string(),
             pos: Chess::default(),
-            rows: Vec::new(),
-            ply: 0,
+            moves: Vec::new(),
             error: None,
         }
     }
 }
 
-impl Visitor for GameVisitor {
-    type Result = Vec<PgnMoveRow>;
+impl Visitor for ScanVisitor {
+    type Result = ScanGameRow;
 
     fn header(&mut self, key: &[u8], value: RawHeader<'_>) {
         if let (Ok(key), Ok(value)) = (
             std::str::from_utf8(key),
             std::str::from_utf8(value.as_bytes()),
         ) {
-            self.headers
-                .push((key.to_string(), value.trim_matches('"').to_string()));
+            let val = value.trim_matches('"').to_string();
+            match key {
+                "White" => self.white = val,
+                "Black" => self.black = val,
+                "Result" => self.result = val,
+                _ => {}
+            }
         }
     }
+
     fn end_headers(&mut self) -> Skip {
         Skip(false)
     }
@@ -405,7 +548,9 @@ impl Visitor for GameVisitor {
             }
         };
 
+        let from_hash = get_canonical_hash(&self.pos);
         let uci = Uci::from_move(&mv, shakmaty::CastlingMode::Standard).to_string();
+        let move_int = encode_move(&mv);
 
         let new_pos = match self.pos.clone().play(&mv) {
             Ok(p) => p,
@@ -415,25 +560,17 @@ impl Visitor for GameVisitor {
             }
         };
 
-        let fen = Fen::from_position(new_pos.clone(), EnPassantMode::Legal).to_string();
-        let zobrist: Zobrist64 = new_pos.zobrist_hash(EnPassantMode::Legal);
-        let zobrist = format!("{:016x}", zobrist.0);
-        let move_number = (self.ply / 2) + 1;
-        let color = if self.ply % 2 == 0 { "white" } else { "black" };
+        let to_hash = get_canonical_hash(&new_pos);
 
-        self.rows.push(PgnMoveRow {
-            game_index: self.game_index,
-            ply: self.ply,
-            move_number,
-            color: color.to_string(),
+        self.moves.push(ScanMoveRow {
+            from_hash,
+            move_int,
+            to_hash,
             san: san_str,
             uci,
-            fen,
-            zobrist,
         });
 
         self.pos = new_pos;
-        self.ply += 1;
     }
 
     fn begin_variation(&mut self) -> Skip {
@@ -441,11 +578,43 @@ impl Visitor for GameVisitor {
     }
 
     fn end_game(&mut self) -> Self::Result {
-        std::mem::take(&mut self.rows)
+        ScanGameRow {
+            game_index: self.game_index,
+            white: std::mem::take(&mut self.white),
+            black: std::mem::take(&mut self.black),
+            result: std::mem::take(&mut self.result),
+            moves: std::mem::take(&mut self.moves),
+        }
     }
 }
 
-pub fn pgn_to_fens(pgn_str: &str, span: Span) -> Result<Vec<PgnMoveRow>, LabeledError> {
+pub fn scan_pgn(pgn_str: &str, span: Span) -> Result<Vec<ScanGameRow>, LabeledError> {
+    let mut reader = BufferedReader::new(pgn_str.as_bytes());
+    let mut games = Vec::new();
+    let mut game_index = 0;
+
+    loop {
+        let mut visitor = ScanVisitor::new(game_index);
+        match reader.read_game(&mut visitor) {
+            Ok(Some(game)) => {
+                if let Some(err) = visitor.error {
+                    return Err(LabeledError::new(err).with_label("error during move replay", span));
+                }
+                games.push(game);
+                game_index += 1;
+            }
+            Ok(None) => break,
+            Err(e) => {
+                return Err(LabeledError::new(format!("PGN parse error: {e}"))
+                    .with_label("failed to parse PGN", span))
+            }
+        }
+    }
+
+    Ok(games)
+}
+
+pub fn pgn_to_fens(pgn_str: &str, span: Span) -> Result<Vec<MoveRow>, LabeledError> {
     let mut reader = BufferedReader::new(pgn_str.as_bytes());
     let mut visitor = GameVisitor::new(0, span);
 
@@ -473,7 +642,6 @@ pub fn pgn_to_batch_record(pgn_str: &str, span: Span) -> Result<BatchSummary, La
     let mut reader = BufferedReader::new(pgn_str.as_bytes());
     let mut games = Vec::new();
     let mut positions = Vec::new();
-    // BTreeMap for unique positions: zobrist -> fen (insertion-ordered dedup, O(N log N))
     let mut unique_map: BTreeMap<String, String> = BTreeMap::new();
     unique_map.insert(initial_hash.clone(), initial_fen.to_string());
     let mut collisions: BTreeMap<String, BatchCollisionRow> = BTreeMap::new();

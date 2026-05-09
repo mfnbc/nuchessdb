@@ -1,12 +1,13 @@
 use ./utils.nu *
 use ./config.nu *
 use ./db.nu *
+use ./critter.nu *
 
 def headers-list-to-record [headers: list<record>] {
   $headers | reduce -f {} { |row, acc| $acc | upsert $row.key $row.value }
 }
 
-def bulk-insert-positions [rows: list<record>] {
+export def bulk-insert-positions [rows: list<record>] {
   let values = ($rows | each { |row|
     let fen = (strip-fen $row.fen)
     let hash = ($fen | chessdb zobrist)
@@ -27,7 +28,7 @@ def bulk-insert-positions [rows: list<record>] {
   ] | str join
 }
 
-def bulk-insert-moves [rows: list<record>] {
+export def bulk-insert-moves [rows: list<record>] {
   let values = ($rows | each { |r|
     let f_q = (sql-string $r.from_hash)
     let t_q = (sql-string $r.to_hash)
@@ -46,11 +47,114 @@ def bulk-insert-moves [rows: list<record>] {
   ] | str join
 }
 
-export def import-pgn-file [path: string, platform: string] {
+export def calculate-stats-stmts [edges: list<record>] {
+  # Position Stats
+  let pos_stats = ($edges | group-by to_hash | items { |hash, group|
+    let w_wins = ($group | where result == "1-0" | length)
+    let b_wins = ($group | where result == "0-1" | length)
+    let draws  = ($group | where result == "1/2-1/2" | length)
+    let total  = ($group | length)
+    
+    let me_wins = ($group | where { |r| ($r.is_me_white and $r.result == "1-0") or ($r.is_me_black and $r.result == "0-1") } | length)
+    let me_losses = ($group | where { |r| ($r.is_me_white and $r.result == "0-1") or ($r.is_me_black and $r.result == "1-0") } | length)
+    let me_draws = ($group | where { |r| ($r.is_me_white or $r.is_me_black) and $r.result == "1/2-1/2" } | length)
+    let me_total = ($me_wins + $me_losses + $me_draws)
+
+    let h_val = $hash
+    let w_val = ($w_wins | into string)
+    let d_val = ($draws | into string)
+    let b_val = ($b_wins | into string)
+    let t_val = ($total | into string)
+    let mw_val = ($me_wins | into string)
+    let md_val = ($me_draws | into string)
+    let ml_val = ($me_losses | into string)
+    let mt_val = ($me_total | into string)
+
+    [
+      "INSERT INTO position_color_stats (position_id, white_wins, draws, black_wins, occurrences, me_wins, me_draws, me_losses, me_occurrences) VALUES ("
+      "(SELECT id FROM positions WHERE canonical_hash = '", $h_val, "'),"
+      $w_val, "," $d_val, "," $b_val, "," $t_val, "," $mw_val, "," $md_val, "," $ml_val, "," $mt_val, ")"
+      " ON CONFLICT(position_id) DO UPDATE SET "
+      "white_wins = white_wins + excluded.white_wins, "
+      "draws = draws + excluded.draws, "
+      "black_wins = black_wins + excluded.black_wins, "
+      "occurrences = occurrences + excluded.occurrences, "
+      "me_wins = me_wins + excluded.me_wins, "
+      "me_draws = me_draws + excluded.me_draws, "
+      "me_losses = me_losses + excluded.me_losses, "
+      "me_occurrences = me_occurrences + excluded.me_occurrences;"
+    ] | str join
+  })
+
+  # Move Stats
+  let move_stats = ($edges | group-by { |e| $e.from_hash + $e.to_hash + $e.uci } | items { |key, group|
+    let first = ($group | first)
+    let w_wins = ($group | where result == "1-0" | length)
+    let b_wins = ($group | where result == "0-1" | length)
+    let draws  = ($group | where result == "1/2-1/2" | length)
+    let total  = ($group | length)
+
+    let me_wins = ($group | where { |r| ($r.is_me_white and $r.result == "1-0") or ($r.is_me_black and $r.result == "0-1") } | length)
+    let me_losses = ($group | where { |r| ($r.is_me_white and $r.result == "0-1") or ($r.is_me_black and $r.result == "1-0") } | length)
+    let me_draws = ($group | where { |r| ($r.is_me_white or $r.is_me_black) and $r.result == "1/2-1/2" } | length)
+    let me_total = ($me_wins + $me_losses + $me_draws)
+
+    let from_hash = $first.from_hash
+    let to_hash = $first.to_hash
+    let uci = $first.uci
+
+    let w_val = ($w_wins | into string)
+    let b_val = ($b_wins | into string)
+    let d_val = ($draws | into string)
+    let t_val = ($total | into string)
+    let mw_val = ($me_wins | into string)
+    let ml_val = ($me_losses | into string)
+    let md_val = ($me_draws | into string)
+    let mt_val = ($me_total | into string)
+
+    [
+      "INSERT INTO move_stats (move_id, white_wins, draws, black_wins, occurrences, me_wins, me_draws, me_losses, me_occurrences) VALUES ("
+      "(SELECT id FROM moves WHERE from_position_id = (SELECT id FROM positions WHERE canonical_hash = '", $from_hash, "')"
+      " AND to_position_id = (SELECT id FROM positions WHERE canonical_hash = '", $to_hash, "')"
+      " AND move_uci = '", $uci, "'),"
+      $w_val, "," $d_val, "," $b_val, "," $t_val, "," $mw_val, "," $md_val, "," $ml_val, "," $mt_val, ")"
+      " ON CONFLICT(move_id) DO UPDATE SET "
+      "white_wins = white_wins + excluded.white_wins, "
+      "draws = draws + excluded.draws, "
+      "black_wins = black_wins + excluded.black_wins, "
+      "occurrences = occurrences + excluded.occurrences, "
+      "me_wins = me_wins + excluded.me_wins, "
+      "me_draws = me_draws + excluded.me_draws, "
+      "me_losses = me_losses + excluded.me_losses, "
+      "me_occurrences = me_occurrences + excluded.me_occurrences;"
+    ] | str join
+  })
+
+  $pos_stats | append $move_stats
+}
+
+def account-upsert-sql [platform: string, username: string, is_me: bool] {
+  if ($username | is-empty) { "" } else {
+    let p_q = (sql-string $platform)
+    let u_q = (sql-string $username)
+    let me = if $is_me { 1 } else { 0 }
+    "INSERT INTO accounts (platform, username, is_me) VALUES (" + $p_q + "," + $u_q + "," + ($me | into string) + ") ON CONFLICT(platform, username) DO UPDATE SET is_me = excluded.is_me;"
+  }
+}
+
+export def import-pgn-file [path: string, platform: string, --with-critter] {
   let cfg = load-config
   let db_path = $cfg.database.path
   let text = (open $path)
+  
+  # Use scan-pgn first for lightweight game/result mapping
+  print "Scanning PGN..."
+  let scan_data = ($text | chessdb scan-pgn)
+  
+  # Use pgn-to-batch for full move/FEN data
+  print "Parsing batch..."
   let batch = ($text | chessdb pgn-to-batch)
+  
   let initial_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
   let initial_hash = (strip-fen $initial_fen | chessdb zobrist)
   let me_username = (if $platform == "chesscom" { $cfg.identity.me.chesscom } else { $cfg.identity.me.lichess })
@@ -93,10 +197,25 @@ export def import-pgn-file [path: string, platform: string] {
 
   # 3. Moves (Edges)
   let all_edges = ($batch.games | each { |g|
+    let headers = (headers-list-to-record $g.headers)
+    let white = ($headers | get -o White | default "")
+    let black = ($headers | get -o Black | default "")
+    let is_me_white = ($me_username != "" and ($white | str downcase) == ($me_username | str downcase))
+    let is_me_black = ($me_username != "" and ($black | str downcase) == ($me_username | str downcase))
+    
     let hashes = ([$initial_hash] | append ($g.moves | each { |m| (strip-fen $m.fen | chessdb zobrist) }))
     $g.moves | enumerate | each { |item|
       let row = $item.item
-      { from_hash: ($hashes | get $item.index), to_hash: (strip-fen $row.fen | chessdb zobrist), uci: $row.uci, san: $row.san }
+      { 
+        from_hash: ($hashes | get $item.index), 
+        to_hash: (strip-fen $row.fen | chessdb zobrist), 
+        uci: $row.uci, 
+        san: $row.san,
+        result: $g.result,
+        is_me_white: $is_me_white,
+        is_me_black: $is_me_black,
+        full_fen: $row.fen # Keep for critter
+      }
     }
   } | flatten)
   
@@ -106,14 +225,42 @@ export def import-pgn-file [path: string, platform: string] {
     run-sql $db_path $move_stmts
   }
 
-  print "Import complete (Structural Collapse enabled)."
-}
+  # 4. Statistics (Global & Me)
+  print "Calculating statistics..."
+  let stat_stmts = (calculate-stats-stmts $all_edges)
+  run-sql $db_path $stat_stmts
 
-def account-upsert-sql [platform: string, username: string, is_me: bool] {
-  if ($username | is-empty) { "" } else {
-    let p_q = (sql-string $platform)
-    let u_q = (sql-string $username)
-    let me = if $is_me { 1 } else { 0 }
-    "INSERT INTO accounts (platform, username, is_me) VALUES (" + $p_q + "," + $u_q + "," + ($me | into string) + ") ON CONFLICT(platform, username) DO UPDATE SET is_me = excluded.is_me;"
+  # 5. In-line Critter Evaluation
+  if $with_critter {
+    print "Running real-time Critter analysis..."
+    let eval_targets = ($unique_positions | where { |p| 
+        (open $db_path | query db (["SELECT 1 FROM position_critter_evals WHERE position_id = (SELECT id FROM positions WHERE canonical_hash = '", $p.hash, "')"] | str join) | is-empty)
+    })
+    
+    if not ($eval_targets | is-empty) {
+        print $"Evaluating ($eval_targets | length) new positions..."
+        use ./critter.nu *
+        let c_cfg = (load-config | get enrichment.critter)
+        let cn = ($c_cfg.name | default "critter-eval")
+        let cm = ($c_cfg.model | default "")
+        let created_at = (date now | format date "%Y-%m-%d %H:%M:%S")
+        
+        let evals = ($eval_targets | each { |p|
+            try {
+                let pos_id = (open $db_path | query db (["SELECT id FROM positions WHERE canonical_hash = '", $p.hash, "'"] | str join) | get 0.id)
+                let record = ($p.fen | chessdb critter-eval)
+                { position_id: $pos_id, eval_record: $record }
+            } catch {
+                null
+            }
+        } | where { $in != null })
+        
+        if not ($evals | is-empty) {
+            let eval_stmts = (bulk-critter-eval-insert-sql $evals $cn $cm $created_at)
+            run-sql $db_path $eval_stmts
+        }
+    }
   }
+
+  print "Import complete (Structural Collapse, Stats, and Critter enabled)."
 }

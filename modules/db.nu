@@ -27,9 +27,14 @@ def split-sql-statements [sql_text: string] {
 export def run-sql [db_path: string, statements: list<string>] {
   let db = (open $db_path)
   try {
-    $db | query db "BEGIN IMMEDIATE;" | ignore
-    for stmt in ($statements | where { |stmt| not ($stmt | is-empty) }) {
-      $db | query db $stmt | ignore
+    $db | query db "BEGIN TRANSACTION;" | ignore
+    for s in $statements {
+      try {
+        $db | query db $s | ignore
+      } catch { |e|
+        print $"Failed on statement: ($s)"
+        error make { msg: ($e | to text) }
+      }
     }
     $db | query db "COMMIT;" | ignore
   } catch { |err|
