@@ -37,21 +37,20 @@ def main [...args] {
 
     "sync" => {
       if ($rest | length) < 2 {
-        print "Usage: nu nuchessdb.nu sync <platform> <username> [--with-critter]"
-        print "Example: nu nuchessdb.nu sync chesscom hikaru --with-critter"
+        print "Usage: nu nuchessdb.nu sync <platform> <username>"
+        print "Example: nu nuchessdb.nu sync chesscom hikaru"
         return
       }
 
       let platform = $rest.0
       let username = $rest.1
-      let with_critter = ($rest | any { |arg| $arg == "--with-critter" })
 
       if $platform != "chesscom" and $platform != "lichess" {
         print $"Error: platform must be 'chesscom' or 'lichess', got '($platform)'"
         return
       }
 
-      print $"Syncing ($platform) games for ($username)..."
+      print $"Syncing ($platform) games for ($username) with Critter evaluation..."
       init-db | ignore
 
       # Sync all archives
@@ -65,26 +64,23 @@ def main [...args] {
       let imported_count = ($result.archives | where skipped == false | length)
       print $"✓ Imported ($imported_count) archives"
 
-      # Run critter eval if requested
-      if $with_critter {
-        print "Running Critter evaluation on new positions..."
-        let eval_result = (critter-eval-queue 100)
-        print $"✓ Evaluated ($eval_result | length) positions"
-      }
+      # Always run critter eval
+      print "Running Critter evaluation on new positions..."
+      let eval_result = (critter-eval-queue 100)
+      print $"✓ Evaluated ($eval_result | length) positions"
 
       show-overview
     }
 
     "import" => {
       if ($rest | length) < 2 {
-        print "Usage: nu nuchessdb.nu import <path.pgn> <platform> [--with-critter]"
-        print "Example: nu nuchessdb.nu import ./data/games.pgn chesscom --with-critter"
+        print "Usage: nu nuchessdb.nu import <path.pgn> <platform>"
+        print "Example: nu nuchessdb.nu import ./data/games.pgn chesscom"
         return
       }
 
       let path = $rest.0
       let platform = $rest.1
-      let with_critter = ($rest | any { |arg| $arg == "--with-critter" })
 
       if not ($path | path exists) {
         print $"Error: file not found: ($path)"
@@ -96,14 +92,11 @@ def main [...args] {
         return
       }
 
-      print $"Importing ($path) as ($platform) games..."
+      print $"Importing ($path) as ($platform) games with Critter evaluation..."
       init-db | ignore
 
-      if $with_critter {
-        import-pgn-file $path $platform --with-critter
-      } else {
-        import-pgn-file $path $platform
-      }
+      # Always use critter evaluation
+      import-pgn-file $path $platform --with-critter
 
       print "✓ Import complete"
       show-overview
@@ -181,29 +174,29 @@ USAGE:
   nu nuchessdb.nu <command> [args...]
 
 COMMANDS:
-  init                                  Initialize database and schema
-  sync <platform> <username> [flags]    Download and import games
-  import <path.pgn> <platform> [flags]  Import PGN file
-  status                                Show database overview
-  report [limit]                        Position performance report (default: 20)
-  recent [limit]                        Recently imported games (default: 10)
-  top [limit]                           Most-visited positions (default: 20)
-  critter-eval [limit]                  Run Critter evaluation queue (default: 20)
-  coach-review <game_id>                Generate AI coaching for a game
-  eco-classify [limit]                  Top positions with ECO names (default: 20)
-  help                                  Show this help message
+  init                             Initialize database and schema
+  sync <platform> <username>       Download and import games with Critter eval
+  import <path.pgn> <platform>     Import PGN file with Critter eval
+  status                           Show database overview
+  report [limit]                   Position performance report (default: 20)
+  recent [limit]                   Recently imported games (default: 10)
+  top [limit]                      Most-visited positions (default: 20)
+  critter-eval [limit]             Run Critter evaluation queue (default: 20)
+  coach-review <game_id>           Generate AI coaching for a game
+  eco-classify [limit]             Top positions with ECO names (default: 20)
+  help                             Show this help message
 
-FLAGS:
-  --with-critter                        Run Critter evaluation during import
+NOTE:
+  All import operations automatically include Critter decomposed evaluation.
 
 EXAMPLES:
   # Initialize database
   nu nuchessdb.nu init
 
-  # Sync all games from chess.com with evaluation
-  nu nuchessdb.nu sync chesscom hikaru --with-critter
+  # Sync all games from chess.com (includes Critter evaluation)
+  nu nuchessdb.nu sync chesscom hikaru
 
-  # Import a PGN file
+  # Import a PGN file (includes Critter evaluation)
   nu nuchessdb.nu import ./data/games.pgn chesscom
 
   # Check status
