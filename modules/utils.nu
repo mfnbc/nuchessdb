@@ -35,3 +35,13 @@ export def chunks-of [chunk_size: int] {
     $rows | skip ($i * $chunk_size) | first $chunk_size
   }
 }
+
+# Strip half-move clock and full-move number from FEN for structural collapse.
+export def strip-fen [fen: string] {
+  $fen | split row " " | first 4 | str join " "
+}
+
+# Get a stable hash for a structural position (Zobrist of stripped FEN).
+export def structural-hash [fen: string] {
+  strip-fen $fen | chessdb zobrist
+}
