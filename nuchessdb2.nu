@@ -5,17 +5,78 @@
 # This intentionally avoids the large modules/ sub-system and stores imported
 # games as one JSON-per-line NDJSON file: nuchessdb_games.ndjson
 
-def _db_path [] { "./nuchessdb_games.ndjson" }
+# Storage helpers: support ndjson (default) and a single-file JSON-array format (.nuon)
+# Choose formats by existence: .nuon file preferred if present, otherwise .ndjson
+
+def _db_format [] {
+  if ("./nuchessdb_games.nuon" | path exists) { "nuon" } elif ("./nuchessdb_games.ndjson" | path exists) { "ndjson" } else { "ndjson" }
+}
+
+def _db_path_for [fmt: string] {
+  if $fmt == "nuon" { "./nuchessdb_games.nuon" } else { "./nuchessdb_games.ndjson" }
+}
+
+def _db_path [] { _db_path_for (_db_format) }
 
 def ensure-db [] {
-  let path = (_db_path)
+  let fmt = (_db_format)
+  let path = (_db_path_for $fmt)
   if not ($path | path exists) {
-    # create empty ndjson store
-    "" | save --raw --force $path
-    print "Created compact DB: ($path)"
+    if $fmt == "ndjson" {
+      "" | save --raw --force $path
+    } else {
+      # For nuon (JSON array) start with an empty array
+      "[]" | save --raw --force $path
+    }
+    print $"Created compact DB: ($path) (format: ($fmt))"
   } else {
-    # noop
     $path
+  }
+}
+
+# Read all records from DB as a Nushell list of records
+
+def read-db-records [] {
+  let fmt = (_db_format)
+  let path = (_db_path_for $fmt)
+  if not ($path | path exists) { [] } else {
+    if $fmt == "ndjson" {
+      (open --raw $path | lines | where { $it != "" } | each { ($it) | from json })
+    } else {
+      # nuon: expect a single JSON array
+      let raw = (open --raw $path)
+      try { ($raw | from json) } catch { [] }
+    }
+  }
+}
+
+# Overwrite DB with provided list of records
+
+def write-db-records [rows] {
+  let fmt = (_db_format)
+  let path = (_db_path_for $fmt)
+  if $fmt == "ndjson" {
+    # overwrite file and append one JSON object per line
+    "" | save --raw --force $path
+    ($rows | each { ($it | to json) | save --append --raw $path })
+  } else {
+    # write a single JSON array
+    ($rows | to json) | save --raw --force $path
+  }
+}
+
+# Append a list of records to DB (efficient for ndjson; for nuon we merge)
+
+def append-db-records [rows] {
+  let fmt = (_db_format)
+  let path = (_db_path_for $fmt)
+  if $fmt == "ndjson" {
+    ($rows | each { ($it | to json) | save --append --raw $path })
+    if not ((open --raw $path) | str ends-with "\n") { "" | save --append --raw $path }
+  } else {
+    let existing = (read-db-records)
+    let merged = ($existing + $rows)
+    write-db-records $merged
   }
 }
 
@@ -74,11 +135,11 @@ def import-pgn-file [path: string, platform: string] {
 
       let imported = (
         $games_list
-        | each { |g| ($g | to json) | save --append --raw $db; $g }
+        | each { |g| $g }
       )
 
-      # ensure newline at EOF
-      if not ((open --raw $db) | str ends-with "\n") { "" | save --append --raw $db }
+      # append into storage (format-aware)
+      append-db-records $imported
       let count = ($imported | length)
       print $"✓ Imported ($count) games from JSON into ($db)"
       { imported: $count, rows: $imported }
@@ -102,17 +163,16 @@ def import-pgn-file [path: string, platform: string] {
           let parsed = (parse-pgn-chunk $piece)
           let meta = { platform: $platform }
           let record = ($meta | merge $parsed)
-          # append JSON line to ndjson store
-          ($record | to json) | save --append --raw $db
           $record
         } else { [] }
       }
     | where { |r| not ($r | is-empty) }
   )
 
+  # append into storage (format-aware)
+  append-db-records $imported
+
   let count = ($imported | length)
-  # ensure newline after each appended JSON
-  if not ((open --raw $db) | str ends-with "\n") { "" | save --append --raw $db }
   print $"✓ Imported ($count) games into ($db)"
   { imported: $count, rows: $imported }
 }
@@ -120,8 +180,8 @@ def import-pgn-file [path: string, platform: string] {
 # Count games in compact DB
 
 def db-count [] {
-  let db = (_db_path)
-  if not ($db | path exists) { 0 } else { (open --raw $db | lines | where { $it != "" } | length) }
+  let rows = (read-db-records)
+  ($rows | length)
 }
 
 # Show status overview
@@ -135,27 +195,21 @@ def show-status [] {
 # Show recent games
 
 def recent-games [limit: int = 10] {
-  let db = (_db_path)
-  if not ($db | path exists) { [] } else {
-    (open --raw $db | lines | where { $it != "" } | last $limit | each { ($it) | from json })
-  }
+  let rows = (read-db-records)
+  if ($rows | is-empty) { [] } else { ($rows | last $limit) }
 }
 
 # Report top openings by headers.Opening (fallback: Unknown)
 
 def opening-report [limit: int = 20] {
-  let db = (_db_path)
-  if not ($db | path exists) { [] } else {
-    (open --raw $db
-      | lines
-      | where { $it != "" }
-      | each { ($it) | from json }
+  let rows = (read-db-records)
+  if ($rows | is-empty) { [] } else {
+    ($rows
       | each { { opening: ($in.headers.Opening | default "Unknown") } }
       | group-by opening
       | each { { opening: $in.key, count: ($in.items | length) } }
       | sort-by count desc
-      | first $limit
-    )
+      | first $limit)
   }
 }
 
@@ -185,6 +239,24 @@ def main [...args] {
       let limit = if ($rest | is-empty) { 20 } else { ($rest.0 | into int) }
       opening-report $limit | table --expand
     }
+    "convert" => {
+      if ($rest | is-empty) { print "Usage: nu nuchessdb2.nu convert <ndjson|nuon>"; return }
+      let fmt = $rest.0
+      if ($fmt != "ndjson" and $fmt != "nuon") { print "Supported formats: ndjson, nuon"; return }
+      let rows = (read-db-records)
+      if ($rows | is-empty) { print "No records to convert"; return }
+      # write to the requested format path
+      let dest = (_db_path_for $fmt)
+      if ($fmt == "ndjson") {
+        # overwrite ndjson
+        "" | save --raw --force $dest
+        ($rows | each { ($it | to json) | save --append --raw $dest })
+        if not ((open --raw $dest) | str ends-with "\n") { "" | save --append --raw $dest }
+      } else {
+        ($rows | to json) | save --raw --force $dest
+      }
+      print $"Converted DB to ($dest) (format: ($fmt))"
+    }
     "help" | "--help" | "-h" => { print-help }
     _ => { print $"Unknown command: ($cmd)"; print "Run 'nu nuchessdb2.nu help' for usage" }
   }
@@ -204,6 +276,7 @@ COMMANDS:
   status                    Show DB status (game count)
   recent [n]                Show n most recent games (default 10)
   report [n]                Top n openings by occurrence (default 20)
+  convert <format>          Convert DB to 'ndjson' or 'nuon' (safe)
   help                      Show this help message
 " }
 
