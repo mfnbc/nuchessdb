@@ -232,30 +232,51 @@ export def import-pgn-file [path: string, platform: string] {
 
   # 5. In-line Critter Evaluation (always enabled)
   print "Running real-time Critter analysis..."
-  let eval_targets = ($unique_positions | where { |p| 
-      (open $db_path | query db (["SELECT 1 FROM position_critter_evals WHERE position_id = (SELECT id FROM positions WHERE canonical_hash = '", $p.hash, "')"] | str join) | is-empty)
-  })
+  
+  # Batch check: find positions that need evaluation in a single query
+  let position_hashes = ($unique_positions | get hash | each { |h| "'" + $h + "'" } | str join ", ")
+  let existing_evals = if ($position_hashes | is-empty) { [] } else {
+    open $db_path | query db ([
+      "SELECT p.canonical_hash FROM positions p ",
+      "JOIN position_critter_evals e ON e.position_id = p.id ",
+      "WHERE p.canonical_hash IN (", $position_hashes, ")"
+    ] | str join)
+  }
+  let existing_hashes = ($existing_evals | get canonical_hash)
+  let eval_targets = ($unique_positions | where { |p| not ($p.hash in $existing_hashes) })
   
   if not ($eval_targets | is-empty) {
-      print $"Evaluating ($eval_targets | length) new positions..."
+      print $"Evaluating ($eval_targets | length) new positions in parallel..."
       use ./critter.nu *
       let c_cfg = (load-config | get enrichment.critter)
       let cn = ($c_cfg.name | default "critter-eval")
       let cm = ($c_cfg.model | default "")
       let created_at = (date now | format date "%Y-%m-%d %H:%M:%S")
       
-      let evals = ($eval_targets | each { |p|
+      # Parallel evaluation of positions
+      let evals = ($eval_targets | par-each { |p|
           try {
-              let pos_id = (open $db_path | query db (["SELECT id FROM positions WHERE canonical_hash = '", $p.hash, "'"] | str join) | get 0.id)
               let record = ($p.fen | chessdb critter-eval)
-              { position_id: $pos_id, eval_record: $record }
+              { hash: $p.hash, eval_record: $record }
           } catch {
               null
           }
       } | where { $in != null })
       
+      # Batch fetch position IDs for all evaluated positions
       if not ($evals | is-empty) {
-          let eval_stmts = (bulk-critter-eval-insert-sql $evals $cn $cm $created_at)
+          let eval_hashes = ($evals | get hash | each { |h| "'" + $h + "'" } | str join ", ")
+          let position_ids = (open $db_path | query db ([
+            "SELECT id, canonical_hash FROM positions WHERE canonical_hash IN (", $eval_hashes, ")"
+          ] | str join))
+          
+          # Join evals with position IDs
+          let evals_with_ids = ($evals | each { |e|
+              let pos_id = ($position_ids | where canonical_hash == $e.hash | get 0.id)
+              { position_id: $pos_id, eval_record: $e.eval_record }
+          })
+          
+          let eval_stmts = (bulk-critter-eval-insert-sql $evals_with_ids $cn $cm $created_at)
           run-sql $db_path $eval_stmts
       }
   }
