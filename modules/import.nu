@@ -147,6 +147,10 @@ export def import-pgn-file [path: string, platform: string] {
   let db_path = $cfg.database.path
   let text = (open $path)
   
+  # Optimize database for bulk writes
+  open $db_path | query db "PRAGMA journal_mode=WAL;" | ignore
+  open $db_path | query db "PRAGMA synchronous=NORMAL;" | ignore
+  
   # Use scan-pgn first for lightweight game/result mapping
   print "Scanning PGN..."
   let scan_data = ($text | chessdb scan-pgn)
