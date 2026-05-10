@@ -188,8 +188,9 @@ def main [...args] {
             report-moves $rest.0 | table
         }
         "review" => {
-            if ($rest | is-empty) { print "Provide the game's source_id (URL)"; return }
-            review-game $rest.0 | table
+            if ($rest | is-empty) { print "Provide the game_id (integer)"; return }
+            let id = ($rest.0 | into int)
+            review-game $id | table
         }
         "recent" => {
             let limit = if ($rest | is-empty) { 5 } else { ($rest.0 | into int) }
