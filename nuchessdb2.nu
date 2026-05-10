@@ -156,7 +156,7 @@ def report-moves [zobrist: string] {
     " --params [$zobrist]
 }
 
-def review-game [game_id: string] {
+def review-game [game_id: int] {
     let db = (_db_path)
     # Join moves to the *next* position to see the evaluation of the board AFTER the move was played
     open $db | query db "
@@ -166,7 +166,7 @@ def review-game [game_id: string] {
             m.color, 
             m.san, 
             p.critter_score,
-            p.critter_json
+            p.critter_eval_arr
         FROM moves m
         JOIN positions p ON m.next_position_id = p.zobrist
         WHERE m.game_id = ?
