@@ -181,14 +181,23 @@ def review-game [game_id: int] {
         let current_arr = ($row.critter_eval_arr | from json)
         let last_arr = $acc.arr
         
-        # Calculate deltas for each metric
-        let deltas = ($current_arr | zip $last_arr | each { |pair| $pair.0 - $pair.1 })
+        # In engine evaluations, a positive score is good for White and a negative score is good for Black.
+        # To make the deltas intuitive ("a positive delta means the move was good for the player who made it"),
+        # we flip the sign of the difference if Black just moved.
+        let multiplier = if $row.color == "black" { -1 } else { 1 }
         
+        # Calculate deltas for each metric
+        let deltas = ($current_arr | zip $last_arr | each { |pair| ($pair.0 - $pair.1) * $multiplier })
+        
+        # Also map the absolute score to player-relative perspective (so + means winning for the player whose turn it is)
+        let relative_score = $row.critter_score * $multiplier
+
         let out_row = {
             ply: $row.ply
+            move_number: $row.move_number
             move: $row.san
             color: $row.color
-            score: $row.critter_score
+            score: $relative_score
             Δ_material: $deltas.0
             Δ_structure: $deltas.1
             Δ_activity: $deltas.2
