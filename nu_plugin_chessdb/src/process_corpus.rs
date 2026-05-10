@@ -111,7 +111,18 @@ impl PluginCommand for ProcessCorpus {
                     }
                 }
                 if let Ok(move_rows) = pgn_to_fens(pgn, span) {
-                    let mut prev_zobrist: Option<String> = None;
+                    let initial_zobrist = "463b96181691fc9c".to_string();
+                    if unique_positions.insert(initial_zobrist.clone()) {
+                        let pos_record = record! {
+                            "zobrist" => Value::string(&initial_zobrist, span),
+                            "fen" => Value::string("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", span),
+                            "critter_score" => Value::int(0, span),
+                            "critter_eval_arr" => Value::string("[]", span),
+                            "nnue_score" => Value::int(0, span),
+                        };
+                        out_positions.push(Value::record(pos_record, span));
+                    }
+                    let mut prev_zobrist: Option<String> = Some(initial_zobrist);
 
                     for m_row in move_rows {
                         let z_hex = m_row.zobrist.clone();

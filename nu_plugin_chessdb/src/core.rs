@@ -187,6 +187,7 @@ impl Visitor for GameVisitor {
         let zobrist = format!("{:016x}", zobrist.0);
         let move_number = (self.ply / 2) + 1;
         let color = if self.ply % 2 == 0 { "white" } else { "black" };
+        self.ply += 1;
 
         self.rows.push(MoveRow {
             game_index: self.game_index,
@@ -200,7 +201,7 @@ impl Visitor for GameVisitor {
         });
 
         self.pos = new_pos;
-        self.ply += 1;
+        
     }
 
     fn begin_variation(&mut self) -> Skip {
