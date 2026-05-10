@@ -159,7 +159,7 @@ def report-moves [zobrist: string] {
 def review-game [game_id: int] {
     let db = (_db_path)
     # Join moves to the *next* position to see the evaluation of the board AFTER the move was played
-    open $db | query db "
+    let raw = (open $db | query db "
         SELECT 
             m.ply, 
             m.move_number, 
@@ -171,7 +171,35 @@ def review-game [game_id: int] {
         JOIN positions p ON m.next_position_id = p.zobrist
         WHERE m.game_id = ?
         ORDER BY m.ply ASC
-    " --params [$game_id]
+    " --params [$game_id])
+    
+    # Process array dynamically to calculate deltas and map readable columns
+    mut last_arr = [0 0 0 0 0 0 0 0 0 0 0]
+    
+    $raw | each { |row|
+        let current_arr = ($row.critter_eval_arr | from json)
+        
+        # Calculate deltas for each metric
+        let deltas = ($current_arr | zip $last_arr | each { |pair| $pair.0 - $pair.1 })
+        
+        # Update state for next row
+        $last_arr = $current_arr
+        
+        {
+            ply: $row.ply
+            move: $row.san
+            color: $row.color
+            score: $row.critter_score
+            Δ_material: $deltas.0
+            Δ_structure: $deltas.1
+            Δ_activity: $deltas.2
+            Δ_king: $deltas.3
+            Δ_passed: $deltas.4
+            Δ_dev: $deltas.5
+            Δ_space: $deltas.6
+            Δ_strategic: $deltas.7
+        }
+    }
 }
 
 # --- 4. Main Interface ---
