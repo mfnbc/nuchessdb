@@ -1,6 +1,6 @@
 #!/usr/bin/env nu
 
-# nuchessdb2.nu - Unified Chess Data Analytics Platform
+# nuchessdb - Unified Chess Data Analytics Platform
 # A high-performance, compact chess engine/database/analytics tool.
 
 # --- Configuration & Paths ---
