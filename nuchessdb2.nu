@@ -174,18 +174,17 @@ def review-game [game_id: int] {
     " --params [$game_id])
     
     # Process array dynamically to calculate deltas and map readable columns
-    mut last_arr = [0 0 0 0 0 0 0 0 0 0 0]
+    # Use reduce instead of each to carry state cleanly
+    let initial_state = { arr: [0 0 0 0 0 0 0 0 0 0 0], rows: [] }
     
-    $raw | each { |row|
+    let processed = ($raw | reduce -f $initial_state { |row, acc|
         let current_arr = ($row.critter_eval_arr | from json)
+        let last_arr = $acc.arr
         
         # Calculate deltas for each metric
         let deltas = ($current_arr | zip $last_arr | each { |pair| $pair.0 - $pair.1 })
         
-        # Update state for next row
-        $last_arr = $current_arr
-        
-        {
+        let out_row = {
             ply: $row.ply
             move: $row.san
             color: $row.color
@@ -199,7 +198,11 @@ def review-game [game_id: int] {
             Δ_space: $deltas.6
             Δ_strategic: $deltas.7
         }
-    }
+        
+        { arr: $current_arr, rows: ($acc.rows | append $out_row) }
+    })
+    
+    $processed.rows
 }
 
 # --- 4. Main Interface ---
