@@ -195,7 +195,7 @@ def main [...args] {
             let limit = if ($rest | is-empty) { 5 } else { ($rest.0 | into int) }
             let db = (_db_path)
             open $db | query db "
-                SELECT played_at, white, black, result, opening, source_id 
+                SELECT played_at, white, black, result, opening, game_id 
                 FROM games 
                 ORDER BY played_at DESC 
                 LIMIT ?
