@@ -116,6 +116,7 @@ impl PluginCommand for ProcessCorpus {
                         let pos_record = record! {
                             "zobrist" => Value::string(&initial_zobrist, span),
                             "fen" => Value::string("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", span),
+                            "board_pieces" => Value::string("rnbqkbnrppppppppPPPPPPPPRNBQKBNR", span),
                             "critter_score" => Value::int(0, span),
                             "critter_eval_arr" => Value::string("[]", span),
                             "nnue_score" => Value::int(0, span),
@@ -150,12 +151,17 @@ impl PluginCommand for ProcessCorpus {
                                 },
                                 Err(_) => (0, "[]".to_string()),
                             };
+                            
+                            // Capture the raw material remaining on the board as a lightweight string (e.g. "rnbqkbnr")
+                            // so the LLM doesn't have to guess what pieces are left based on the FEN.
+                            let board_pieces: String = m_row.fen.chars().take_while(|c| *c != ' ').filter(|c| c.is_alphabetic()).collect();
 
                             let nnue_score = 0; // To be mapped when NNUE bulk interface is ready
 
                             let pos_record = record! {
                                 "zobrist" => Value::string(&z_hex, span),
                                 "fen" => Value::string(&m_row.fen, span),
+                                "board_pieces" => Value::string(board_pieces, span),
                                 "critter_score" => Value::int(critter_score as i64, span),
                                 "critter_eval_arr" => Value::string(&critter_eval_arr, span),
                                 "nnue_score" => Value::int(nnue_score as i64, span),

@@ -126,7 +126,7 @@ def import-records [games: list, platform: string, username: string] {
             open $temp_db | query db "SELECT game_id, source, white, black, white_elo, black_elo, result, played_at, time_control, eco, opening FROM temp_games;" | into sqlite $db -t games
         }
         if ($corpus.positions | is-not-empty) {
-            open $temp_db | query db "SELECT zobrist, fen, critter_score, critter_eval_arr, nnue_score FROM temp_positions;" | into sqlite $db -t positions
+            open $temp_db | query db "SELECT zobrist, fen, board_pieces, critter_score, critter_eval_arr, nnue_score FROM temp_positions;" | into sqlite $db -t positions
         }
         if ($corpus.moves | is-not-empty) {
             open $temp_db | query db "SELECT game_id, position_id, next_position_id, ply, move_number, color, san, uci FROM temp_moves;" | into sqlite $db -t moves
@@ -165,6 +165,7 @@ def review-game [game_id: int] {
             m.move_number, 
             m.color, 
             m.san, 
+            p.board_pieces,
             p.critter_score,
             p.critter_eval_arr
         FROM moves m
@@ -197,6 +198,7 @@ def review-game [game_id: int] {
             move_number: $row.move_number
             move: $row.san
             color: $row.color
+            pieces: $row.board_pieces
             score: $relative_score
             Δ_material: $deltas.0
             Δ_structure: $deltas.1
