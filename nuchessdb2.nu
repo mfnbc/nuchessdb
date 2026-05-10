@@ -113,16 +113,24 @@ def import-records [games: list, platform: string, username: string] {
         # 2. Nushell pipes the flat arrays into a temporary database instantly
         rm -f $temp_db
         "" | save -f $temp_db
-        $corpus.games | into sqlite $temp_db -t temp_games
-        $corpus.positions | into sqlite $temp_db -t temp_positions
-        $corpus.moves | into sqlite $temp_db -t temp_moves
+        
+        # Guard against completely empty datasets failing table creation
+        if ($corpus.games | is-not-empty) { $corpus.games | into sqlite $temp_db -t temp_games }
+        if ($corpus.positions | is-not-empty) { $corpus.positions | into sqlite $temp_db -t temp_positions }
+        if ($corpus.moves | is-not-empty) { $corpus.moves | into sqlite $temp_db -t temp_moves }
 
         # 3. Single Transaction Merge
         print $"[Database] Merging corpus into ($db)..."
-        # Nushell handles ATTACH best via a single command block or by dumping to SQL and importing
-        open $temp_db | query db "SELECT game_id, source, white, black, white_elo, black_elo, result, played_at, time_control, eco, opening FROM temp_games;" | into sqlite $db -t games
-        open $temp_db | query db "SELECT zobrist, fen, critter_score, critter_eval_arr, nnue_score FROM temp_positions;" | into sqlite $db -t positions
-        open $temp_db | query db "SELECT game_id, position_id, next_position_id, ply, move_number, color, san, uci FROM temp_moves;" | into sqlite $db -t moves
+        
+        if ($corpus.games | is-not-empty) {
+            open $temp_db | query db "SELECT game_id, source, white, black, white_elo, black_elo, result, played_at, time_control, eco, opening FROM temp_games;" | into sqlite $db -t games
+        }
+        if ($corpus.positions | is-not-empty) {
+            open $temp_db | query db "SELECT zobrist, fen, critter_score, critter_eval_arr, nnue_score FROM temp_positions;" | into sqlite $db -t positions
+        }
+        if ($corpus.moves | is-not-empty) {
+            open $temp_db | query db "SELECT game_id, position_id, next_position_id, ply, move_number, color, san, uci FROM temp_moves;" | into sqlite $db -t moves
+        }
         
         rm -f $temp_db
         print "✓ Batch merge complete."
