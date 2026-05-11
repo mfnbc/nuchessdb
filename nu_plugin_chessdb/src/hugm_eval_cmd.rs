@@ -30,18 +30,6 @@ impl PluginCommand for HugmEval {
                 "Optional engine centipawn score to compare against",
                 Some('e'),
             )
-.named(
-                "explain",
-                SyntaxShape::Boolean,
-                "Include human-readable explanations for detected features (alias for --verbose)",
-                Some('x'),
-            )
-            .named(
-                "structured",
-                SyntaxShape::Boolean,
-                "Include structured JSON explanations for LLMs",
-                Some('S'),
-            )
             .named(
                 "verbose",
                 SyntaxShape::Boolean,
@@ -60,11 +48,8 @@ impl PluginCommand for HugmEval {
     ) -> Result<PipelineData, LabeledError> {
         let span = call.head;
         let engine_score: Option<i64> = call.get_flag("engine-score")?;
-        let explain_flag: Option<bool> = call.get_flag("explain")?;
-        let structured_flag: Option<bool> = call.get_flag("structured")?;
         let verbose_flag: Option<bool> = call.get_flag("verbose")?;
-        let include_human = verbose_flag.unwrap_or(false) || explain_flag.unwrap_or(false);
-        let include_structured = verbose_flag.unwrap_or(false) || structured_flag.unwrap_or(false);
+        let include_verbose = verbose_flag.unwrap_or(false);
         let input_value = input.into_value(span)?;
 
         match input_value {
@@ -77,18 +62,12 @@ impl PluginCommand for HugmEval {
                     LabeledError::new(e.to_string()).with_label("serialization error", span)
                 })?;
 
-                if include_human || include_structured {
-                    if include_human {
-                        let expl = crate::eval::render_explanations(&record);
-                        if let serde_json::Value::Object(ref mut map) = json_val {
-                            map.insert("explanations".to_string(), serde_json::Value::Array(expl.into_iter().map(|s| serde_json::Value::String(s)).collect()));
-                        }
-                    }
-                    if include_structured {
+                if include_verbose {
+                    let expl = crate::eval::render_explanations(&record);
+                    if let serde_json::Value::Object(ref mut map) = json_val {
+                        map.insert("explanations".to_string(), serde_json::Value::Array(expl.into_iter().map(|s| serde_json::Value::String(s)).collect()));
                         let structured = crate::eval::render_structured_explanations(&record);
-                        if let serde_json::Value::Object(ref mut map) = json_val {
-                            map.insert("explanations_structured".to_string(), serde_json::Value::Array(structured));
-                        }
+                        map.insert("explanations_structured".to_string(), serde_json::Value::Array(structured));
                     }
                 }
 
@@ -117,18 +96,12 @@ impl PluginCommand for HugmEval {
                             .ok()
                             .and_then(|record| {
                                 let mut json_val = serde_json::to_value(&record).ok()?;
-                                if include_human || include_structured {
-                                    if include_human {
-                                        let expl = crate::eval::render_explanations(&record);
-                                        if let serde_json::Value::Object(ref mut map) = json_val {
-                                            map.insert("explanations".to_string(), serde_json::Value::Array(expl.into_iter().map(|s| serde_json::Value::String(s)).collect()));
-                                        }
-                                    }
-                                    if include_structured {
+                                if include_verbose {
+                                    let expl = crate::eval::render_explanations(&record);
+                                    if let serde_json::Value::Object(ref mut map) = json_val {
+                                        map.insert("explanations".to_string(), serde_json::Value::Array(expl.into_iter().map(|s| serde_json::Value::String(s)).collect()));
                                         let structured = crate::eval::render_structured_explanations(&record);
-                                        if let serde_json::Value::Object(ref mut map) = json_val {
-                                            map.insert("explanations_structured".to_string(), serde_json::Value::Array(structured));
-                                        }
+                                        map.insert("explanations_structured".to_string(), serde_json::Value::Array(structured));
                                     }
                                 }
                                 serde_json::to_string(&json_val).ok()
