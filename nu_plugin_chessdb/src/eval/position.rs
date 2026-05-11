@@ -2,6 +2,33 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use shakmaty::{attacks, fen::Fen, Bitboard, Chess, Color, File, Position, Rank, Role, Square};
 
+// Configurable constants (GUESS values) collected here for easier tuning.
+const TACTICAL_BASE_PINS: i64 = 50;
+const TACTICAL_BASE_FORKS: i64 = 80;
+const TACTICAL_BASE_SKEWERS: i64 = 40;
+const TACTICAL_BASE_DISC: i64 = 60;
+const PHASE_FACTOR_DEN: i64 = 40;
+
+const ROOK_OPEN_FILE_BONUS: i64 = 25;
+const DOUBLED_ROOK_BONUS: i64 = 20;
+const ROOK_SEVENTH_BONUS: i64 = 30;
+
+const OUTPOST_WEIGHT: i64 = 40;
+
+// Tropism piece weights
+const TROPISM_QUEEN: i64 = 90;
+const TROPISM_ROOK: i64 = 50;
+const TROPISM_BISHOP: i64 = 35;
+const TROPISM_KNIGHT: i64 = 30;
+const TROPISM_PAWN: i64 = 10;
+
+// Piece values used for fork/skewer heuristics
+const VAL_QUEEN: i64 = 900;
+const VAL_ROOK: i64 = 500;
+const VAL_BISHOP: i64 = 330;
+const VAL_KNIGHT: i64 = 320;
+const VAL_PAWN: i64 = 100;
+
 #[derive(Debug, Serialize)]
 pub struct PositionRecord {
     pub fen: String,
@@ -756,11 +783,11 @@ fn piece_activity_score(
         let pawns_on_file = (board.by_role(Role::Pawn) & file_mask).any();
         if !pawns_on_file {
             open_file_controlled += 1;
-            local += 25; // GUESS
+            local += ROOK_OPEN_FILE_BONUS; // GUESS (constant)
         }
         if color.is_white() {
             if sq.rank() == Rank::Seventh {
-                local += 30;
+                local += ROOK_SEVENTH_BONUS;
                 rook_on_seventh += 1;
             } else if sq.rank() == Rank::Eighth {
                 local += 13;
@@ -768,7 +795,7 @@ fn piece_activity_score(
                 local += 13;
             }
         } else if sq.rank() == Rank::Second {
-            local += 30;
+            local += ROOK_SEVENTH_BONUS;
             rook_on_seventh += 1;
         } else if sq.rank() == Rank::First {
             local += 13;
@@ -784,7 +811,7 @@ fn piece_activity_score(
         let cnt = (board.by_color(color) & board.by_role(Role::Rook) & file_mask).count();
         if cnt >= 2 {
             doubled_rooks += 1;
-            rook_score += 20; // GUESS
+            rook_score += DOUBLED_ROOK_BONUS; // GUESS (constant)
         }
     }
 
@@ -850,15 +877,15 @@ fn king_tropism_score(board: &shakmaty::Board, color: Color) -> i64 {
         }
         // piece weight guess (GUESS)
         let weight = if (Bitboard::from(sq) & board.by_role(Role::Queen)).any() {
-            90
+            TROPISM_QUEEN
         } else if (Bitboard::from(sq) & board.by_role(Role::Rook)).any() {
-            50
+            TROPISM_ROOK
         } else if (Bitboard::from(sq) & board.by_role(Role::Bishop)).any() {
-            35
+            TROPISM_BISHOP
         } else if (Bitboard::from(sq) & board.by_role(Role::Knight)).any() {
-            30
+            TROPISM_KNIGHT
         } else if (Bitboard::from(sq) & board.by_role(Role::Pawn)).any() {
-            10
+            TROPISM_PAWN
         } else {
             0
         };
@@ -928,11 +955,11 @@ fn detect_forks(board: &shakmaty::Board, color: Color) -> (i64, Option<(Square, 
         let mut sum = 0_i64;
         let mut targets: Vec<Square> = Vec::new();
         for (role, val) in [
-            (Role::Queen, 900_i64),
-            (Role::Rook, 500_i64),
-            (Role::Bishop, 330_i64),
-            (Role::Knight, 320_i64),
-            (Role::Pawn, 100_i64),
+            (Role::Queen, VAL_QUEEN),
+            (Role::Rook, VAL_ROOK),
+            (Role::Bishop, VAL_BISHOP),
+            (Role::Knight, VAL_KNIGHT),
+            (Role::Pawn, VAL_PAWN),
         ] {
             let mask = attacked_pieces & board.by_role(role);
             for t in mask {
@@ -941,7 +968,7 @@ fn detect_forks(board: &shakmaty::Board, color: Color) -> (i64, Option<(Square, 
             }
         }
         // Count as fork when at least two pieces attacked and combined value above threshold
-        if sum >= 500 || attacked_pieces.count() >= 3 {
+        if sum >= (VAL_ROOK) || attacked_pieces.count() >= 3 {
             forks += 1;
             if example.is_none() {
                 example = Some((sq, targets.clone()));
@@ -1010,15 +1037,15 @@ fn detect_skewers(board: &shakmaty::Board, color: Color) -> (i64, Option<(Square
             if found.len() >= 2 {
                 let val = |sq: Square| {
                     if (Bitboard::from(sq) & board.by_role(Role::Queen)).any() {
-                        900
+                        VAL_QUEEN
                     } else if (Bitboard::from(sq) & board.by_role(Role::Rook)).any() {
-                        500
+                        VAL_ROOK
                     } else if (Bitboard::from(sq) & board.by_role(Role::Bishop)).any() {
-                        330
+                        VAL_BISHOP
                     } else if (Bitboard::from(sq) & board.by_role(Role::Knight)).any() {
-                        320
+                        VAL_KNIGHT
                     } else if (Bitboard::from(sq) & board.by_role(Role::Pawn)).any() {
-                        100
+                        VAL_PAWN
                     } else {
                         0
                     }
@@ -1105,21 +1132,13 @@ fn tactical_score(board: &shakmaty::Board, us: Color, phase: u8) -> GroupValue {
     let (disc_us, disc_ex_us) = detect_discovered(board, us);
     let (disc_them, disc_ex_them) = detect_discovered(board, them);
 
-    // GUESS base weights
-    let base_w_pins = 50_i64;
-    let base_w_forks = 80_i64;
-    let base_w_skewers = 40_i64;
-    let base_w_disc = 60_i64;
-
-    // Phase scaling: more tactical emphasis in earlier/middlegame when phase is higher.
-    // scale = (phase + 8) / 40 -> range approx 0.2..1.0 (integer math: multiply before dividing)
+    // Tactical base weights (from constants)
     let phase_factor_num = i64::from(phase) + 8; // numerator
-    let phase_factor_den = 40_i64; // denominator
 
-    let w_pins = base_w_pins * phase_factor_num / phase_factor_den;
-    let w_forks = base_w_forks * phase_factor_num / phase_factor_den;
-    let w_skewers = base_w_skewers * phase_factor_num / phase_factor_den;
-    let w_disc = base_w_disc * phase_factor_num / phase_factor_den;
+    let w_pins = TACTICAL_BASE_PINS * phase_factor_num / PHASE_FACTOR_DEN;
+    let w_forks = TACTICAL_BASE_FORKS * phase_factor_num / PHASE_FACTOR_DEN;
+    let w_skewers = TACTICAL_BASE_SKEWERS * phase_factor_num / PHASE_FACTOR_DEN;
+    let w_disc = TACTICAL_BASE_DISC * phase_factor_num / PHASE_FACTOR_DEN;
 
     let total_us = pins_us * w_pins + forks_us * w_forks + skewers_us * w_skewers + disc_us * w_disc;
     let total_them = pins_them * w_pins + forks_them * w_forks + skewers_them * w_skewers + disc_them * w_disc;
@@ -1634,8 +1653,7 @@ fn compute_groups(chess: &Chess, phase: u8, legal_move_count: usize) -> EvalGrou
     // Outpost detection: add as a piece activity term, with example context
     let (outposts_us, out_ex_us) = detect_outposts(board, us);
     let (outposts_them, out_ex_them) = detect_outposts(board, them);
-    let outpost_weight = 40_i64; // GUESS
-    let outpost_delta = outposts_us * outpost_weight - outposts_them * outpost_weight;
+    let outpost_delta = outposts_us * OUTPOST_WEIGHT - outposts_them * OUTPOST_WEIGHT;
     piece_activity.blended += outpost_delta;
     piece_activity.terms.insert("outposts_us".into(), serde_json::Value::from(outposts_us));
     piece_activity.terms.insert("outposts_them".into(), serde_json::Value::from(outposts_them));
