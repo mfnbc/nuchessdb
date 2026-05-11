@@ -63,9 +63,13 @@ impl PluginCommand for HugmEval {
                 })?;
 
                 if explain {
+                    // human-readable string explanations
                     let expl = crate::eval::render_explanations(&record);
                     if let serde_json::Value::Object(ref mut map) = json_val {
                         map.insert("explanations".to_string(), serde_json::Value::Array(expl.into_iter().map(|s| serde_json::Value::String(s)).collect()));
+                        // structured JSON explanations
+                        let structured = crate::eval::render_structured_explanations(&record);
+                        map.insert("explanations_structured".to_string(), serde_json::Value::Array(structured));
                     }
                 }
 
@@ -98,6 +102,8 @@ impl PluginCommand for HugmEval {
                                     let expl = crate::eval::render_explanations(&record);
                                     if let serde_json::Value::Object(ref mut map) = json_val {
                                         map.insert("explanations".to_string(), serde_json::Value::Array(expl.into_iter().map(|s| serde_json::Value::String(s)).collect()));
+                                        let structured = crate::eval::render_structured_explanations(&record);
+                                        map.insert("explanations_structured".to_string(), serde_json::Value::Array(structured));
                                     }
                                 }
                                 serde_json::to_string(&json_val).ok()
