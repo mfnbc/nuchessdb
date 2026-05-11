@@ -867,13 +867,15 @@ fn king_tropism_score(board: &shakmaty::Board, color: Color) -> i64 {
     score
 }
 
-fn detect_pins(board: &shakmaty::Board, color: Color) -> i64 {
+fn detect_pins(board: &shakmaty::Board, color: Color) -> (i64, Option<(Square, Square, Square)>) {
+    // returns (count, Some((pinning_piece_sq, pinned_piece_sq, king_sq))) as an example
     let king_sq = match board.king_of(color) {
         Some(sq) => sq,
-        None => return 0,
+        None => return (0, None),
     };
     let occ = board.occupied();
     let mut pins = 0_i64;
+    let mut example: Option<(Square, Square, Square)> = None;
 
     let sliders = board.by_color(color.other())
         & (board.by_role(Role::Rook) | board.by_role(Role::Bishop) | board.by_role(Role::Queen));
@@ -901,17 +903,20 @@ fn detect_pins(board: &shakmaty::Board, color: Color) -> i64 {
             let king_after = (after & Bitboard::from(king_sq)).any();
             if !king_before && king_after {
                 pins += 1;
+                if example.is_none() {
+                    example = Some((s, blocker, king_sq));
+                }
                 break;
             }
         }
     }
-    pins
+    (pins, example)
 }
 
-fn detect_forks(board: &shakmaty::Board, color: Color) -> i64 {
-    // Improved fork detection: require attacking >=2 enemy pieces and prefer forks
-    // that include at least one high-value target (queen/rook).
+fn detect_forks(board: &shakmaty::Board, color: Color) -> (i64, Option<(Square, Vec<Square>)>) {
+    // returns (count, Some((attacker_sq, vec![target_sqs...])))
     let mut forks = 0_i64;
+    let mut example: Option<(Square, Vec<Square>)> = None;
     let enemy_bb = board.by_color(color.other());
     for sq in board.by_color(color) {
         let attacks = board.attacks_from(sq);
@@ -921,6 +926,7 @@ fn detect_forks(board: &shakmaty::Board, color: Color) -> i64 {
         }
         // sum values of attacked pieces (GUESS values)
         let mut sum = 0_i64;
+        let mut targets: Vec<Square> = Vec::new();
         for (role, val) in [
             (Role::Queen, 900_i64),
             (Role::Rook, 500_i64),
@@ -928,19 +934,25 @@ fn detect_forks(board: &shakmaty::Board, color: Color) -> i64 {
             (Role::Knight, 320_i64),
             (Role::Pawn, 100_i64),
         ] {
-            let cnt = (attacked_pieces & board.by_role(role)).count() as i64;
-            sum += cnt * val;
+            let mask = attacked_pieces & board.by_role(role);
+            for t in mask {
+                sum += val;
+                targets.push(t);
+            }
         }
         // Count as fork when at least two pieces attacked and combined value above threshold
         if sum >= 500 || attacked_pieces.count() >= 3 {
             forks += 1;
+            if example.is_none() {
+                example = Some((sq, targets.clone()));
+            }
         }
     }
-    forks
+    (forks, example)
 }
 
-fn detect_skewers(board: &shakmaty::Board, color: Color) -> i64 {
-    // Ray-scan method: for each sliding piece, walk rays and collect opponent pieces in order.
+fn detect_skewers(board: &shakmaty::Board, color: Color) -> (i64, Option<(Square, Square, Square)>) {
+    // returns (count, Some((attacker_sq, front_sq, back_sq))) as example
     let mut skewers = 0_i64;
     let enemy = color.other();
     let directions: &[(i8, i8)] = &[
@@ -953,6 +965,8 @@ fn detect_skewers(board: &shakmaty::Board, color: Color) -> i64 {
         (1, -1),
         (-1, -1),
     ];
+
+    let mut example: Option<(Square, Square, Square)> = None;
 
     for s in board.by_color(color) & (board.by_role(Role::Rook) | board.by_role(Role::Bishop) | board.by_role(Role::Queen)) {
         let s_bb = Bitboard::from(s);
@@ -983,12 +997,9 @@ fn detect_skewers(board: &shakmaty::Board, color: Color) -> i64 {
                         let sq = Square::from_coords(cur_file, cur_rank);
                         if (board.by_color(enemy) & Bitboard::from(sq)).any() {
                             found.push(sq);
-                            // continue scanning to see behind pieces
                         }
                         if (board.occupied() & Bitboard::from(sq)).any() {
-                            // blocked by any piece - but we still recorded opponent pieces
-                            // continue to next square to capture pieces behind (we allow scanning beyond blockers)
-                            // Note: we do not stop here to find multiple opponent pieces in ray
+                            // blocked by any piece
                         }
                         continue;
                     }
@@ -1016,16 +1027,21 @@ fn detect_skewers(board: &shakmaty::Board, color: Color) -> i64 {
                 let v1 = val(found[1]);
                 if v0 > v1 {
                     skewers += 1;
+                    if example.is_none() {
+                        example = Some((s, found[0], found[1]));
+                    }
                 }
             }
         }
     }
-    skewers
+    (skewers, example)
 }
 
-fn detect_discovered(board: &shakmaty::Board, color: Color) -> i64 {
+fn detect_discovered(board: &shakmaty::Board, color: Color) -> (i64, Option<(Square, Square, Square)>) {
+    // returns (count, Some((blocker_sq, slider_sq, target_sq))) example
     let occ = board.occupied();
     let mut discovered = 0_i64;
+    let mut example: Option<(Square, Square, Square)> = None;
     let enemy_bb = board.by_color(color.other());
     let sliders = board.by_color(color) & (board.by_role(Role::Rook) | board.by_role(Role::Bishop) | board.by_role(Role::Queen));
 
@@ -1049,23 +1065,45 @@ fn detect_discovered(board: &shakmaty::Board, color: Color) -> i64 {
             let newly = (after & enemy_bb) & !before;
             if newly.any() {
                 discovered += 1;
+                if example.is_none() {
+                    // pick one target square
+                    if let Some(t) = newly.into_iter().next() {
+                        example = Some((blocker, s, t));
+                    }
+                }
                 break;
             }
         }
     }
-    discovered
+    (discovered, example)
+}
+
+fn piece_square_name(board: &shakmaty::Board, sq: Square) -> String {
+    // Return a short piece+square like "Nd5" or just square if no piece found.
+    if let Some(piece) = board.piece_at(sq) {
+        let letter = match piece.role {
+            Role::Pawn => "P",
+            Role::Knight => "N",
+            Role::Bishop => "B",
+            Role::Rook => "R",
+            Role::Queen => "Q",
+            Role::King => "K",
+        };
+        return format!("{}{}", letter, sq);
+    }
+    format!("{}", sq)
 }
 
 fn tactical_score(board: &shakmaty::Board, us: Color, phase: u8) -> GroupValue {
     let them = us.other();
-    let pins_us = detect_pins(board, us);
-    let pins_them = detect_pins(board, them);
-    let forks_us = detect_forks(board, us);
-    let forks_them = detect_forks(board, them);
-    let skewers_us = detect_skewers(board, us);
-    let skewers_them = detect_skewers(board, them);
-    let disc_us = detect_discovered(board, us);
-    let disc_them = detect_discovered(board, them);
+    let (pins_us, pin_ex_us) = detect_pins(board, us);
+    let (pins_them, pin_ex_them) = detect_pins(board, them);
+    let (forks_us, fork_ex_us) = detect_forks(board, us);
+    let (forks_them, fork_ex_them) = detect_forks(board, them);
+    let (skewers_us, skewer_ex_us) = detect_skewers(board, us);
+    let (skewers_them, skewer_ex_them) = detect_skewers(board, them);
+    let (disc_us, disc_ex_us) = detect_discovered(board, us);
+    let (disc_them, disc_ex_them) = detect_discovered(board, them);
 
     // GUESS base weights
     let base_w_pins = 50_i64;
@@ -1099,6 +1137,36 @@ fn tactical_score(board: &shakmaty::Board, us: Color, phase: u8) -> GroupValue {
     terms.insert("discovered_them".into(), serde_json::Value::from(disc_them));
     terms.insert("total_us".into(), serde_json::Value::from(total_us));
     terms.insert("total_them".into(), serde_json::Value::from(total_them));
+
+    // Examples (piece+square strings)
+    if let Some((att, targets)) = fork_ex_us {
+        let attacker = piece_square_name(board, att);
+        let tnames: Vec<String> = targets.iter().map(|&t| piece_square_name(board, t)).collect();
+        terms.insert("fork_example_us".into(), serde_json::Value::from(format!("{} -> {}", attacker, tnames.join(", "))));
+    }
+    if let Some((att, targets)) = fork_ex_them {
+        let attacker = piece_square_name(board, att);
+        let tnames: Vec<String> = targets.iter().map(|&t| piece_square_name(board, t)).collect();
+        terms.insert("fork_example_them".into(), serde_json::Value::from(format!("{} -> {}", attacker, tnames.join(", "))));
+    }
+    if let Some((att, f, b)) = skewer_ex_us {
+        terms.insert("skewer_example_us".into(), serde_json::Value::from(format!("{}: {} -> {}", piece_square_name(board, att), piece_square_name(board, f), piece_square_name(board, b))));
+    }
+    if let Some((att, f, b)) = skewer_ex_them {
+        terms.insert("skewer_example_them".into(), serde_json::Value::from(format!("{}: {} -> {}", piece_square_name(board, att), piece_square_name(board, f), piece_square_name(board, b))));
+    }
+    if let Some((pinner, pinned, king)) = pin_ex_us {
+        terms.insert("pin_example_us".into(), serde_json::Value::from(format!("{} pins {} to {}", piece_square_name(board, pinner), piece_square_name(board, pinned), piece_square_name(board, king))));
+    }
+    if let Some((pinner, pinned, king)) = pin_ex_them {
+        terms.insert("pin_example_them".into(), serde_json::Value::from(format!("{} pins {} to {}", piece_square_name(board, pinner), piece_square_name(board, pinned), piece_square_name(board, king))));
+    }
+    if let Some((blocker, slider, target)) = disc_ex_us {
+        terms.insert("discovered_example_us".into(), serde_json::Value::from(format!("{} moves unveils {} attacking {}", piece_square_name(board, blocker), piece_square_name(board, slider), piece_square_name(board, target))));
+    }
+    if let Some((blocker, slider, target)) = disc_ex_them {
+        terms.insert("discovered_example_them".into(), serde_json::Value::from(format!("{} moves unveils {} attacking {}", piece_square_name(board, blocker), piece_square_name(board, slider), piece_square_name(board, target))));
+    }
 
     GroupValue {
         mg,
@@ -1621,32 +1689,48 @@ pub fn render_explanations(record: &PositionRecord) -> Vec<String> {
     let side = if record.side_to_move == "white" { "White" } else { "Black" };
     let opp = if side == "White" { "Black" } else { "White" };
 
-    // Tactical explanations
+    // Tactical explanations with examples when available
     if let Some(val) = record.groups.tactical.terms.get("forks_us") {
         if let Some(n) = val.as_i64() {
             if n > 0 {
-                out.push(format!("{} has {} fork(s) detected — check for immediate tactical threats or trade opportunities.", side, n));
+                if let Some(ex) = record.groups.tactical.terms.get("fork_example_us").and_then(|v| v.as_str()) {
+                    out.push(format!("{} has {} fork(s) detected (e.g. {}) — check for immediate tactical threats or trade opportunities.", side, n, ex));
+                } else {
+                    out.push(format!("{} has {} fork(s) detected — check for immediate tactical threats or trade opportunities.", side, n));
+                }
             }
         }
     }
     if let Some(val) = record.groups.tactical.terms.get("skewers_us") {
         if let Some(n) = val.as_i64() {
             if n > 0 {
-                out.push(format!("{} has {} skewer(s) detected — high-value piece may be attacked in-line.", side, n));
+                if let Some(ex) = record.groups.tactical.terms.get("skewer_example_us").and_then(|v| v.as_str()) {
+                    out.push(format!("{} has {} skewer(s) detected (e.g. {}) — high-value piece may be attacked in-line.", side, n, ex));
+                } else {
+                    out.push(format!("{} has {} skewer(s) detected — high-value piece may be attacked in-line.", side, n));
+                }
             }
         }
     }
     if let Some(val) = record.groups.tactical.terms.get("pins_us") {
         if let Some(n) = val.as_i64() {
             if n > 0 {
-                out.push(format!("{} has {} pin(s) — consider relieving pressure or trading pinned pieces.", side, n));
+                if let Some(ex) = record.groups.tactical.terms.get("pin_example_us").and_then(|v| v.as_str()) {
+                    out.push(format!("{} has {} pin(s) (e.g. {}) — consider relieving pressure or trading pinned pieces.", side, n, ex));
+                } else {
+                    out.push(format!("{} has {} pin(s) — consider relieving pressure or trading pinned pieces.", side, n));
+                }
             }
         }
     }
     if let Some(val) = record.groups.tactical.terms.get("discovered_us") {
         if let Some(n) = val.as_i64() {
             if n > 0 {
-                out.push(format!("{} has {} discovered-attack opportunity(ies) — watch for moves that uncover attacks.", side, n));
+                if let Some(ex) = record.groups.tactical.terms.get("discovered_example_us").and_then(|v| v.as_str()) {
+                    out.push(format!("{} has {} discovered-attack opportunity(ies) (e.g. {}) — watch for moves that uncover attacks.", side, n, ex));
+                } else {
+                    out.push(format!("{} has {} discovered-attack opportunity(ies) — watch for moves that uncover attacks.", side, n));
+                }
             }
         }
     }
@@ -1655,7 +1739,11 @@ pub fn render_explanations(record: &PositionRecord) -> Vec<String> {
     if let Some(val) = record.groups.tactical.terms.get("forks_them") {
         if let Some(n) = val.as_i64() {
             if n > 0 {
-                out.push(format!("{} has {} fork(s) (by opponent) — consider defensive resources.", opp, n));
+                if let Some(ex) = record.groups.tactical.terms.get("fork_example_them").and_then(|v| v.as_str()) {
+                    out.push(format!("{} has {} fork(s) (by opponent) (e.g. {}) — consider defensive resources.", opp, n, ex));
+                } else {
+                    out.push(format!("{} has {} fork(s) (by opponent) — consider defensive resources.", opp, n));
+                }
             }
         }
     }

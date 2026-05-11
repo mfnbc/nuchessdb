@@ -15,8 +15,9 @@ Assumptions
 
 High-level goals
 1. Improve human-readable diagnostics (for coaching) by adding motif detectors and more explicit terms (tactical motifs, tropism, rook activity, mobility, outposts).
-2. Preserve backwards compatibility of PositionRecord schema (add terms to existing groups or add new groups, but do not remove fields).
-3. Defer heavy tuning. Initial feature weights will be guessed and annotated. Final tuning will be done by traversing a large ELO-graded game corpus (e.g., lichess DB) and updating weights based on game outcomes and the evaluations that contributed to a chosen move.
+2. Produce human-readable evaluation annotations for each notable feature detected. Annotations should be consumable by the coach-review stage and by downstream LLMs — they should include natural-language phrases and (later) concrete references to piece types and board squares (e.g., "Knight on d5 forks Q on f6 and R on b6").
+3. Preserve backwards compatibility of PositionRecord schema (add terms to existing groups or add new groups, but do not remove fields).
+4. Defer heavy tuning. Initial feature weights will be guessed and annotated. Final tuning will be done by traversing a large ELO-graded game corpus (e.g., lichess DB) and updating weights based on game outcomes and the evaluations that contributed to a chosen move.
 
 Priority feature list (short)
 - A: Tactical motif detectors (pins, forks, skewers, discovered attacks)
@@ -61,7 +62,8 @@ Concrete tasks per feature (developer checklist)
   1. Design motif detectors: detect_pins(board), detect_skewers(board), detect_forks(board), detect_discovered(board).
   2. Implement bitboard-based pattern checks in position.rs alongside other helpers.
   3. Add motif counts and a small weighted mg/eg contribution into an existing group (strategic or new tactical subterms in strategic/group "vector_features").
-  4. Unit tests: small FENs demonstrating each motif and asserting presence of new terms.
+  4. Provide example context for detected motifs: return example squares and piece identities that demonstrate the motif (e.g., fork: {attacker: "Nd5", targets: ["Qf6","Rb6"]}). These are for explainability and optional later consumption by coach-review / LLM prompts.
+  5. Unit tests: small FENs demonstrating each motif and asserting presence of new terms and example context.
 
 - King tropism (B)
   1. Implement attacker_distance_sum(board, color) or weighted tropism function.
@@ -121,6 +123,7 @@ Milestones / timeline suggestion
 Notes for future implementer
 - Scores will be guessed initially and labeled as GUESS in code. We will not attempt to tune weights until we run the corpus exercise described above.
 - The tuning exercise is a major effort (data engineering + careful attribution logic). We intentionally separate feature engineering from tuning to keep progress iterative and reviewable.
+- Human-readable annotations: the long-term goal is that each detector returns both numeric terms and structured explanation context (small JSON objects with piece-square references and severity). These structured annotations will be used to generate short human-readable templates (the render_explanations function) and to feed LLM prompts so the model can "see the board" in plain language. For now, implement detectors to optionally return example squares/pieces when easy; full square-naming coverage may be deferred to a follow-up but should be tracked as a requirement in PRs.
 
 References
 - chessprogramming.org/Evaluation — canonical list of human-understood evaluation concepts used here as source material.
