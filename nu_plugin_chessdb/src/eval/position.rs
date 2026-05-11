@@ -1616,6 +1616,121 @@ pub fn analyze_fen_with_engine_score(
     })
 }
 
+pub fn render_explanations(record: &PositionRecord) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let side = if record.side_to_move == "white" { "White" } else { "Black" };
+    let opp = if side == "White" { "Black" } else { "White" };
+
+    // Tactical explanations
+    if let Some(val) = record.groups.tactical.terms.get("forks_us") {
+        if let Some(n) = val.as_i64() {
+            if n > 0 {
+                out.push(format!("{} has {} fork(s) detected — check for immediate tactical threats or trade opportunities.", side, n));
+            }
+        }
+    }
+    if let Some(val) = record.groups.tactical.terms.get("skewers_us") {
+        if let Some(n) = val.as_i64() {
+            if n > 0 {
+                out.push(format!("{} has {} skewer(s) detected — high-value piece may be attacked in-line.", side, n));
+            }
+        }
+    }
+    if let Some(val) = record.groups.tactical.terms.get("pins_us") {
+        if let Some(n) = val.as_i64() {
+            if n > 0 {
+                out.push(format!("{} has {} pin(s) — consider relieving pressure or trading pinned pieces.", side, n));
+            }
+        }
+    }
+    if let Some(val) = record.groups.tactical.terms.get("discovered_us") {
+        if let Some(n) = val.as_i64() {
+            if n > 0 {
+                out.push(format!("{} has {} discovered-attack opportunity(ies) — watch for moves that uncover attacks.", side, n));
+            }
+        }
+    }
+
+    // Opponent tactical warnings
+    if let Some(val) = record.groups.tactical.terms.get("forks_them") {
+        if let Some(n) = val.as_i64() {
+            if n > 0 {
+                out.push(format!("{} has {} fork(s) (by opponent) — consider defensive resources.", opp, n));
+            }
+        }
+    }
+
+    // King safety / tropism
+    if let Some(val) = record.groups.king_safety.terms.get("tropism_us") {
+        if let Some(n) = val.as_i64() {
+            if n > 0 {
+                out.push(format!("{} pieces show tropism toward the opponent king (score = {}) — attacking chances exist.", side, n));
+            }
+        }
+    }
+
+    // Rook activity
+    if let Some(val) = record.groups.piece_activity.terms.get("open_files_controlled") {
+        if let Some(n) = val.as_i64() {
+            if n > 0 {
+                out.push(format!("{} controls {} open file(s) with rooks — good rook activity.", side, n));
+            }
+        }
+    }
+    if let Some(val) = record.groups.piece_activity.terms.get("rook_on_seventh") {
+        if let Some(n) = val.as_i64() {
+            if n > 0 {
+                out.push(format!("{} has {} rook(s) on the 7th rank — strong pressure on enemy pawns and king.", side, n));
+            }
+        }
+    }
+    if let Some(val) = record.groups.piece_activity.terms.get("doubled_rooks") {
+        if let Some(n) = val.as_i64() {
+            if n > 0 {
+                out.push(format!("{} has {} doubled-rook file(s) — potential for heavy-file pressure.", side, n));
+            }
+        }
+    }
+
+    // Pawn structure notes
+    if let Some(val) = record.groups.pawn_structure.terms.get("isolated") {
+        if let Some(n) = val.as_i64() {
+            if n > 0 {
+                out.push(format!("{} has {} isolated pawn(s) — structural weakness to address.", side, n));
+            }
+        }
+    }
+    if let Some(val) = record.groups.pawn_structure.terms.get("passed") {
+        if let Some(n) = val.as_i64() {
+            if n > 0 {
+                out.push(format!("{} has {} passed pawn(s) — potential long-term advantage.", side, n));
+            }
+        }
+    }
+
+    // Development/space/initiative
+    if let Some(val) = record.groups.development.terms.get("development_diff") {
+        if let Some(n) = val.as_i64() {
+            if n > 0 {
+                out.push(format!("{} is ahead in development/space (diff = {}).", side, n));
+            }
+        }
+    }
+    if let Some(val) = record.groups.strategic.terms.get("initiative") {
+        if let Some(n) = val.as_i64() {
+            if n > 0 {
+                out.push(format!("{} appears to have initiative ({}).", side, n));
+            }
+        }
+    }
+
+    if out.is_empty() {
+        out.push("No immediate human-readable issues detected by static HUGM heuristics.".to_string());
+    }
+
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::analyze_fen;

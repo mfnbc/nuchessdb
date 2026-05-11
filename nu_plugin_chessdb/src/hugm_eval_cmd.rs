@@ -12,7 +12,7 @@ impl PluginCommand for HugmEval {
     }
 
     fn description(&self) -> &str {
-        "Evaluate a chess position or list of positions (FEN from pipeline) and return full HUGM (Human GM) decomposed record(s)."
+        "Evaluate a chess position or list of positions (FEN from pipeline) and return full HUGM (Human GM) decomposed record(s). Use --explain to include human-readable explanations." 
     }
 
     fn signature(&self) -> Signature {
@@ -30,6 +30,12 @@ impl PluginCommand for HugmEval {
                 "Optional engine centipawn score to compare against",
                 Some('e'),
             )
+            .named(
+                "explain",
+                SyntaxShape::Boolean,
+                "Include human-readable explanations for detected features",
+                Some('x'),
+            )
             .category(Category::Custom(crate::PLUGIN_CATEGORY.into()))
     }
 
@@ -42,6 +48,8 @@ impl PluginCommand for HugmEval {
     ) -> Result<PipelineData, LabeledError> {
         let span = call.head;
         let engine_score: Option<i64> = call.get_flag("engine-score")?;
+        let explain: Option<bool> = call.get_flag("explain")?;
+        let explain = explain.unwrap_or(false);
         let input_value = input.into_value(span)?;
 
         match input_value {
@@ -50,9 +58,16 @@ impl PluginCommand for HugmEval {
                 let record = crate::eval::analyze_fen_with_engine_score(&val, engine_score)
                     .map_err(|e| LabeledError::new(e.to_string()).with_label("eval error", span))?;
 
-                let json_val = serde_json::to_value(&record).map_err(|e| {
+                let mut json_val = serde_json::to_value(&record).map_err(|e| {
                     LabeledError::new(e.to_string()).with_label("serialization error", span)
                 })?;
+
+                if explain {
+                    let expl = crate::eval::render_explanations(&record);
+                    if let serde_json::Value::Object(ref mut map) = json_val {
+                        map.insert("explanations".to_string(), serde_json::Value::Array(expl.into_iter().map(|s| serde_json::Value::String(s)).collect()));
+                    }
+                }
 
                 Ok(PipelineData::Value(
                     crate::utils::json_to_nu_value(json_val, span),
@@ -77,7 +92,17 @@ impl PluginCommand for HugmEval {
                     .filter_map(|fen| {
                         crate::eval::analyze_fen_with_engine_score(fen, engine_score)
                             .ok()
-                            .and_then(|record| serde_json::to_value(&record).ok())
+                            .and_then(|record| {
+                                let mut json_val = serde_json::to_value(&record).ok()?;
+                                if explain {
+                                    let expl = crate::eval::render_explanations(&record);
+                                    if let serde_json::Value::Object(ref mut map) = json_val {
+                                        map.insert("explanations".to_string(), serde_json::Value::Array(expl.into_iter().map(|s| serde_json::Value::String(s)).collect()));
+                                    }
+                                }
+                                serde_json::to_string(&json_val).ok()
+                            })
+                            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
                             .map(|json_val| crate::utils::json_to_nu_value(json_val, span))
                     })
                     .collect();
