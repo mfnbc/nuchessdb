@@ -1599,7 +1599,7 @@ fn compute_groups(chess: &Chess, phase: u8, legal_move_count: usize) -> EvalGrou
     );
 
     let mut piece_activity = GroupValue::default();
-    let (piece_us, mut piece_us_terms) = piece_activity_score(
+    let (piece_us, piece_us_terms) = piece_activity_score(
         board,
         us,
         phase,
@@ -1789,6 +1789,7 @@ pub fn analyze_fen_with_engine_score(
 pub fn render_structured_explanations(record: &PositionRecord) -> Vec<serde_json::Value> {
     let mut out: Vec<serde_json::Value> = Vec::new();
     let side = if record.side_to_move == "white" { "white" } else { "black" };
+    let side_cap = if side == "white" { "White" } else { "Black" };
 
     // Helper to create an explanation object
     let make_obj = |kind: &str, side_str: &str, severity: i64, phrase: String, details: serde_json::Map<String, serde_json::Value>| -> serde_json::Value {
@@ -1810,9 +1811,9 @@ pub fn render_structured_explanations(record: &PositionRecord) -> Vec<serde_json
                     details.insert("example".into(), ex.clone());
                 }
                 let phrase = if let Some(ex) = details.get("example").and_then(|v| v.as_str()) {
-                    format!("{} has {} fork(s) detected (e.g. {}).", "White", n, ex)
+                    format!("{} has {} fork(s) detected (e.g. {}).", side_cap, n, ex)
                 } else {
-                    format!("{} has {} fork(s) detected.", "White", n)
+                    format!("{} has {} fork(s) detected.", side_cap, n)
                 };
                 out.push(make_obj("fork", "white", n, phrase, details));
             }
@@ -1828,9 +1829,9 @@ pub fn render_structured_explanations(record: &PositionRecord) -> Vec<serde_json
                     details.insert("example".into(), ex.clone());
                 }
                 let phrase = if let Some(ex) = details.get("example").and_then(|v| v.as_str()) {
-                    format!("{} has {} skewer(s) detected (e.g. {}).", "White", n, ex)
+                    format!("{} has {} skewer(s) detected (e.g. {}).", side_cap, n, ex)
                 } else {
-                    format!("{} has {} skewer(s) detected.", "White", n)
+                    format!("{} has {} skewer(s) detected.", side_cap, n)
                 };
                 out.push(make_obj("skewer", "white", n, phrase, details));
             }
@@ -1846,9 +1847,9 @@ pub fn render_structured_explanations(record: &PositionRecord) -> Vec<serde_json
                     details.insert("example".into(), ex.clone());
                 }
                 let phrase = if let Some(ex) = details.get("example").and_then(|v| v.as_str()) {
-                    format!("{} has {} pin(s) (e.g. {}).", "White", n, ex)
+                    format!("{} has {} pin(s) (e.g. {}).", side_cap, n, ex)
                 } else {
-                    format!("{} has {} pin(s).", "White", n)
+                    format!("{} has {} pin(s).", side_cap, n)
                 };
                 out.push(make_obj("pin", "white", n, phrase, details));
             }
@@ -1864,9 +1865,9 @@ pub fn render_structured_explanations(record: &PositionRecord) -> Vec<serde_json
                     details.insert("example".into(), ex.clone());
                 }
                 let phrase = if let Some(ex) = details.get("example").and_then(|v| v.as_str()) {
-                    format!("{} has {} discovered-attack opportunity(ies) (e.g. {}).", "White", n, ex)
+                    format!("{} has {} discovered-attack opportunity(ies) (e.g. {}).", side_cap, n, ex)
                 } else {
-                    format!("{} has {} discovered-attack opportunity(ies).", "White", n)
+                    format!("{} has {} discovered-attack opportunity(ies).", side_cap, n)
                 };
                 out.push(make_obj("discovered", "white", n, phrase, details));
             }
@@ -1882,9 +1883,9 @@ pub fn render_structured_explanations(record: &PositionRecord) -> Vec<serde_json
                     details.insert("example".into(), ex.clone());
                 }
                 let phrase = if let Some(ex) = details.get("example").and_then(|v| v.as_str()) {
-                    format!("{} has {} outpost(s) (e.g. {}).", "White", n, ex)
+                    format!("{} has {} outpost(s) (e.g. {}).", side_cap, n, ex)
                 } else {
-                    format!("{} has {} outpost(s).", "White", n)
+                    format!("{} has {} outpost(s).", side_cap, n)
                 };
                 out.push(make_obj("outpost", "white", n, phrase, details));
             }
@@ -1897,7 +1898,7 @@ pub fn render_structured_explanations(record: &PositionRecord) -> Vec<serde_json
             if n > 0 {
                 let mut details = serde_json::Map::new();
                 details.insert("count".into(), serde_json::Value::from(n));
-                let phrase = format!("{} controls {} open file(s) with rooks.", "White", n);
+                let phrase = format!("{} controls {} open file(s) with rooks.", side_cap, n);
                 out.push(make_obj("rook_open_files", "white", n, phrase, details));
             }
         }
