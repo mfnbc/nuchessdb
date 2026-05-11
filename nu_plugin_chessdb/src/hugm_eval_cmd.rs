@@ -36,6 +36,12 @@ impl PluginCommand for HugmEval {
                 "Include full JSON explanations and structured annotations (human + structured)",
                 Some('v'),
             )
+            .named(
+                "weights",
+                SyntaxShape::String,
+                "Optional JSON file with tunable weights to override defaults",
+                Some('w'),
+            )
             .category(Category::Custom(crate::PLUGIN_CATEGORY.into()))
     }
 
@@ -50,6 +56,10 @@ impl PluginCommand for HugmEval {
         let engine_score: Option<i64> = call.get_flag("engine-score")?;
         let verbose_flag: Option<bool> = call.get_flag("verbose")?;
         let include_verbose = verbose_flag.unwrap_or(false);
+        let weights_file: Option<String> = call.get_flag("weights")?;
+        if let Some(ref path) = weights_file {
+            crate::eval::set_weights_from_file(path).map_err(|e| LabeledError::new(e).with_label("weights load error", span))?;
+        }
         let input_value = input.into_value(span)?;
 
         match input_value {

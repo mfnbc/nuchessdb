@@ -29,6 +29,111 @@ const VAL_BISHOP: i64 = 330;
 const VAL_KNIGHT: i64 = 320;
 const VAL_PAWN: i64 = 100;
 
+use once_cell::sync::Lazy;
+use std::sync::RwLock;
+use serde::Deserialize;
+
+#[derive(Debug, Clone)]
+pub struct Weights {
+    pub tactical_base_pins: i64,
+    pub tactical_base_forks: i64,
+    pub tactical_base_skewers: i64,
+    pub tactical_base_disc: i64,
+    pub phase_factor_den: i64,
+    pub rook_open_file_bonus: i64,
+    pub doubled_rook_bonus: i64,
+    pub rook_seventh_bonus: i64,
+    pub outpost_weight: i64,
+    pub tropism_queen: i64,
+    pub tropism_rook: i64,
+    pub tropism_bishop: i64,
+    pub tropism_knight: i64,
+    pub tropism_pawn: i64,
+    pub val_queen: i64,
+    pub val_rook: i64,
+    pub val_bishop: i64,
+    pub val_knight: i64,
+    pub val_pawn: i64,
+}
+
+impl Default for Weights {
+    fn default() -> Self {
+        Weights {
+            tactical_base_pins: TACTICAL_BASE_PINS,
+            tactical_base_forks: TACTICAL_BASE_FORKS,
+            tactical_base_skewers: TACTICAL_BASE_SKEWERS,
+            tactical_base_disc: TACTICAL_BASE_DISC,
+            phase_factor_den: PHASE_FACTOR_DEN,
+            rook_open_file_bonus: ROOK_OPEN_FILE_BONUS,
+            doubled_rook_bonus: DOUBLED_ROOK_BONUS,
+            rook_seventh_bonus: ROOK_SEVENTH_BONUS,
+            outpost_weight: OUTPOST_WEIGHT,
+            tropism_queen: TROPISM_QUEEN,
+            tropism_rook: TROPISM_ROOK,
+            tropism_bishop: TROPISM_BISHOP,
+            tropism_knight: TROPISM_KNIGHT,
+            tropism_pawn: TROPISM_PAWN,
+            val_queen: VAL_QUEEN,
+            val_rook: VAL_ROOK,
+            val_bishop: VAL_BISHOP,
+            val_knight: VAL_KNIGHT,
+            val_pawn: VAL_PAWN,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct PartialWeights {
+    tactical_base_pins: Option<i64>,
+    tactical_base_forks: Option<i64>,
+    tactical_base_skewers: Option<i64>,
+    tactical_base_disc: Option<i64>,
+    phase_factor_den: Option<i64>,
+    rook_open_file_bonus: Option<i64>,
+    doubled_rook_bonus: Option<i64>,
+    rook_seventh_bonus: Option<i64>,
+    outpost_weight: Option<i64>,
+    tropism_queen: Option<i64>,
+    tropism_rook: Option<i64>,
+    tropism_bishop: Option<i64>,
+    tropism_knight: Option<i64>,
+    tropism_pawn: Option<i64>,
+    val_queen: Option<i64>,
+    val_rook: Option<i64>,
+    val_bishop: Option<i64>,
+    val_knight: Option<i64>,
+    val_pawn: Option<i64>,
+}
+
+static WEIGHTS: Lazy<RwLock<Weights>> = Lazy::new(|| RwLock::new(Weights::default()));
+
+/// Load weights from a JSON file and override defaults. Keys match struct field names.
+pub fn set_weights_from_file(path: &str) -> Result<(), String> {
+    let s = std::fs::read_to_string(path).map_err(|e| format!("could not read weights file: {}", e))?;
+    let p: PartialWeights = serde_json::from_str(&s).map_err(|e| format!("could not parse weights JSON: {}", e))?;
+    let mut w = WEIGHTS.write().map_err(|e| format!("lock error: {:?}", e))?;
+    if let Some(v) = p.tactical_base_pins { w.tactical_base_pins = v }
+    if let Some(v) = p.tactical_base_forks { w.tactical_base_forks = v }
+    if let Some(v) = p.tactical_base_skewers { w.tactical_base_skewers = v }
+    if let Some(v) = p.tactical_base_disc { w.tactical_base_disc = v }
+    if let Some(v) = p.phase_factor_den { w.phase_factor_den = v }
+    if let Some(v) = p.rook_open_file_bonus { w.rook_open_file_bonus = v }
+    if let Some(v) = p.doubled_rook_bonus { w.doubled_rook_bonus = v }
+    if let Some(v) = p.rook_seventh_bonus { w.rook_seventh_bonus = v }
+    if let Some(v) = p.outpost_weight { w.outpost_weight = v }
+    if let Some(v) = p.tropism_queen { w.tropism_queen = v }
+    if let Some(v) = p.tropism_rook { w.tropism_rook = v }
+    if let Some(v) = p.tropism_bishop { w.tropism_bishop = v }
+    if let Some(v) = p.tropism_knight { w.tropism_knight = v }
+    if let Some(v) = p.tropism_pawn { w.tropism_pawn = v }
+    if let Some(v) = p.val_queen { w.val_queen = v }
+    if let Some(v) = p.val_rook { w.val_rook = v }
+    if let Some(v) = p.val_bishop { w.val_bishop = v }
+    if let Some(v) = p.val_knight { w.val_knight = v }
+    if let Some(v) = p.val_pawn { w.val_pawn = v }
+    Ok(())
+}
+
 #[derive(Debug, Serialize)]
 pub struct PositionRecord {
     pub fen: String,
@@ -783,17 +888,20 @@ fn piece_activity_score(
         let pawns_on_file = (board.by_role(Role::Pawn) & file_mask).any();
         if !pawns_on_file {
             open_file_controlled += 1;
-            local += ROOK_OPEN_FILE_BONUS; // GUESS (constant)
+            let w = WEIGHTS.read().expect("weights lock");
+            local += w.rook_open_file_bonus; // configurable
         }
         if color.is_white() {
             if sq.rank() == Rank::Seventh {
-                local += ROOK_SEVENTH_BONUS;
+                let w = WEIGHTS.read().expect("weights lock");
+                local += w.rook_seventh_bonus;
                 rook_on_seventh += 1;
             } else if sq.rank() == Rank::Eighth || sq.rank() == Rank::Sixth {
                 local += 13;
             }
         } else if sq.rank() == Rank::Second {
-            local += ROOK_SEVENTH_BONUS;
+            let w = WEIGHTS.read().expect("weights lock");
+            local += w.rook_seventh_bonus;
             rook_on_seventh += 1;
         } else if sq.rank() == Rank::First || sq.rank() == Rank::Third {
             local += 13;
@@ -807,7 +915,8 @@ fn piece_activity_score(
         let cnt = (board.by_color(color) & board.by_role(Role::Rook) & file_mask).count();
         if cnt >= 2 {
             doubled_rooks += 1;
-            rook_score += DOUBLED_ROOK_BONUS; // GUESS (constant)
+            let w = WEIGHTS.read().expect("weights lock");
+            rook_score += w.doubled_rook_bonus; // configurable
         }
     }
 
@@ -871,17 +980,18 @@ fn king_tropism_score(board: &shakmaty::Board, color: Color) -> i64 {
         if closeness <= 0 {
             continue;
         }
-        // piece weight guess (GUESS)
+        // piece weight (configurable)
+        let w = WEIGHTS.read().expect("weights lock");
         let weight = if (Bitboard::from(sq) & board.by_role(Role::Queen)).any() {
-            TROPISM_QUEEN
+            w.tropism_queen
         } else if (Bitboard::from(sq) & board.by_role(Role::Rook)).any() {
-            TROPISM_ROOK
+            w.tropism_rook
         } else if (Bitboard::from(sq) & board.by_role(Role::Bishop)).any() {
-            TROPISM_BISHOP
+            w.tropism_bishop
         } else if (Bitboard::from(sq) & board.by_role(Role::Knight)).any() {
-            TROPISM_KNIGHT
+            w.tropism_knight
         } else if (Bitboard::from(sq) & board.by_role(Role::Pawn)).any() {
-            TROPISM_PAWN
+            w.tropism_pawn
         } else {
             0
         };
@@ -950,12 +1060,13 @@ fn detect_forks(board: &shakmaty::Board, color: Color) -> (i64, Option<(Square, 
         // sum values of attacked pieces (GUESS values)
         let mut sum = 0_i64;
         let mut targets: Vec<Square> = Vec::new();
+        let w = WEIGHTS.read().expect("weights lock");
         for (role, val) in [
-            (Role::Queen, VAL_QUEEN),
-            (Role::Rook, VAL_ROOK),
-            (Role::Bishop, VAL_BISHOP),
-            (Role::Knight, VAL_KNIGHT),
-            (Role::Pawn, VAL_PAWN),
+            (Role::Queen, w.val_queen),
+            (Role::Rook, w.val_rook),
+            (Role::Bishop, w.val_bishop),
+            (Role::Knight, w.val_knight),
+            (Role::Pawn, w.val_pawn),
         ] {
             let mask = attacked_pieces & board.by_role(role);
             for t in mask {
@@ -964,7 +1075,7 @@ fn detect_forks(board: &shakmaty::Board, color: Color) -> (i64, Option<(Square, 
             }
         }
         // Count as fork when at least two pieces attacked and combined value above threshold
-        if sum >= (VAL_ROOK) || attacked_pieces.count() >= 3 {
+        if sum >= (w.val_rook) || attacked_pieces.count() >= 3 {
             forks += 1;
             if example.is_none() {
                 example = Some((sq, targets.clone()));
@@ -1031,17 +1142,18 @@ fn detect_skewers(board: &shakmaty::Board, color: Color) -> (i64, Option<(Square
             }
 
             if found.len() >= 2 {
+                let w = WEIGHTS.read().expect("weights lock");
                 let val = |sq: Square| {
                     if (Bitboard::from(sq) & board.by_role(Role::Queen)).any() {
-                        VAL_QUEEN
+                        w.val_queen
                     } else if (Bitboard::from(sq) & board.by_role(Role::Rook)).any() {
-                        VAL_ROOK
+                        w.val_rook
                     } else if (Bitboard::from(sq) & board.by_role(Role::Bishop)).any() {
-                        VAL_BISHOP
+                        w.val_bishop
                     } else if (Bitboard::from(sq) & board.by_role(Role::Knight)).any() {
-                        VAL_KNIGHT
+                        w.val_knight
                     } else if (Bitboard::from(sq) & board.by_role(Role::Pawn)).any() {
-                        VAL_PAWN
+                        w.val_pawn
                     } else {
                         0
                     }
@@ -1128,13 +1240,14 @@ fn tactical_score(board: &shakmaty::Board, us: Color, phase: u8) -> GroupValue {
     let (disc_us, disc_ex_us) = detect_discovered(board, us);
     let (disc_them, disc_ex_them) = detect_discovered(board, them);
 
-    // Tactical base weights (from constants)
+    // Tactical base weights (from configurable WEIGHTS)
     let phase_factor_num = i64::from(phase) + 8; // numerator
+    let w_cfg = WEIGHTS.read().expect("weights lock");
 
-    let w_pins = TACTICAL_BASE_PINS * phase_factor_num / PHASE_FACTOR_DEN;
-    let w_forks = TACTICAL_BASE_FORKS * phase_factor_num / PHASE_FACTOR_DEN;
-    let w_skewers = TACTICAL_BASE_SKEWERS * phase_factor_num / PHASE_FACTOR_DEN;
-    let w_disc = TACTICAL_BASE_DISC * phase_factor_num / PHASE_FACTOR_DEN;
+    let w_pins = w_cfg.tactical_base_pins * phase_factor_num / w_cfg.phase_factor_den;
+    let w_forks = w_cfg.tactical_base_forks * phase_factor_num / w_cfg.phase_factor_den;
+    let w_skewers = w_cfg.tactical_base_skewers * phase_factor_num / w_cfg.phase_factor_den;
+    let w_disc = w_cfg.tactical_base_disc * phase_factor_num / w_cfg.phase_factor_den;
 
     let total_us = pins_us * w_pins + forks_us * w_forks + skewers_us * w_skewers + disc_us * w_disc;
     let total_them = pins_them * w_pins + forks_them * w_forks + skewers_them * w_skewers + disc_them * w_disc;
@@ -1653,7 +1766,8 @@ fn compute_groups(chess: &Chess, phase: u8, legal_move_count: usize) -> EvalGrou
     // Outpost detection: add as a piece activity term, with example context
     let (outposts_us, out_ex_us) = detect_outposts(board, us);
     let (outposts_them, out_ex_them) = detect_outposts(board, them);
-    let outpost_delta = outposts_us * OUTPOST_WEIGHT - outposts_them * OUTPOST_WEIGHT;
+    let w = WEIGHTS.read().expect("weights lock");
+    let outpost_delta = outposts_us * w.outpost_weight - outposts_them * w.outpost_weight;
     piece_activity.blended += outpost_delta;
     piece_activity.terms.insert("outposts_us".into(), serde_json::Value::from(outposts_us));
     piece_activity.terms.insert("outposts_them".into(), serde_json::Value::from(outposts_them));
