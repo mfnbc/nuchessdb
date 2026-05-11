@@ -688,18 +688,64 @@ fn pawn_structure_score(
         terms.insert("pawn_break_examples".into(), serde_json::Value::Array(break_examples));
     }
 
-    // --- Minority attack potential (simple heuristic) ---
+    // --- Minority attack potential (advanced template + strength heuristic) ---
     let mut minority_flag = 0_i64;
+    let mut minority_strength = 0_i64;
+    let mut minority_examples: Vec<serde_json::Value> = Vec::new();
     if own_qs > opp_qs && opp_files_count[1] > 0 && (opp_files_count[0] > 0 || opp_files_count[2] > 0) {
+        // compute simple vulnerability metrics
+        let mut opp_pawns_on_qs = 0_i64;
+        let mut opp_defended = 0_i64;
+        let opp_color = color.other();
+        for f in 0..3 {
+            let file_mask = Bitboard::from(File::new(f));
+            for sq in board.by_color(opp_color) & board.by_role(Role::Pawn) & file_mask {
+                opp_pawns_on_qs += 1;
+                // is this pawn defended by another opponent pawn?
+                let def_by_pawn = (pawn_attack_mask(board, opp_color) & Bitboard::from(sq)).any();
+                if def_by_pawn {
+                    opp_defended += 1;
+                }
+            }
+        }
+
+        // candidate target squares for minority (b4, b5, c4, c5) — generic useful targets
+        let targets = vec![Square::B4, Square::B5, Square::C4, Square::C5];
+        let mut holes = 0_i64;
+        let mut empty_targets: Vec<String> = Vec::new();
+        for &t in &targets {
+            if (board.occupied() & Bitboard::from(t)) == Bitboard::EMPTY {
+                holes += 1;
+                empty_targets.push(t.to_string());
+            }
+        }
+
+        // strength heuristic: base diff scaled by vulnerabilities and holes
+        let base = (own_qs - opp_qs).max(1);
+        let vuln = (opp_pawns_on_qs - opp_defended).max(0);
+        minority_strength = base * (1 + holes + vuln);
+
         minority_flag = 1;
-        score += w.minority_attack_weight;
+        score += minority_strength * w.minority_attack_weight; // scale
+
         let mut m = serde_json::Map::new();
         m.insert("flank".into(), serde_json::Value::from("queenside"));
         m.insert("ours".into(), serde_json::Value::from(own_qs));
         m.insert("theirs".into(), serde_json::Value::from(opp_qs));
-        terms.insert("minority_attack_example".into(), serde_json::Value::Object(m));
+        m.insert("holes".into(), serde_json::Value::from(holes));
+        m.insert("vulnerability".into(), serde_json::Value::from(vuln));
+        m.insert(
+            "targets".into(),
+            serde_json::Value::Array(empty_targets.into_iter().map(serde_json::Value::from).collect()),
+        );
+        terms.insert("minority_attack_example".into(), serde_json::Value::Object(m.clone()));
+        minority_examples.push(serde_json::Value::Object(m));
     }
     terms.insert("minority_attack".into(), serde_json::Value::from(minority_flag));
+    terms.insert("minority_attack_strength".into(), serde_json::Value::from(minority_strength));
+    if !minority_examples.is_empty() {
+        terms.insert("minority_attack_examples".into(), serde_json::Value::Array(minority_examples));
+    }
 
     (score, terms)
 }
