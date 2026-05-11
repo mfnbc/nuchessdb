@@ -57,24 +57,23 @@ impl Layer {
         let mut output = vec![0.0f32; self.out_size];
         // Weight stored as [in_size × out_size] (column-major from PyTorch/candle convention).
         // output[j] = bias[j] + sum_i(input[i] * weight[i * out_size + j])
-        for i in 0..self.in_size {
-            let xi = input[i];
+        for (i, &xi) in input.iter().enumerate().take(self.in_size) {
             if xi == 0.0 {
                 continue;
             }
-            for j in 0..self.out_size {
-                output[j] += xi * self.weight[i * self.out_size + j];
+            for (j, out_j) in output.iter_mut().enumerate().take(self.out_size) {
+                *out_j += xi * self.weight[i * self.out_size + j];
             }
         }
-        for j in 0..self.out_size {
-            output[j] += self.bias[j];
+        for (j, b) in self.bias.iter().enumerate().take(self.out_size) {
+            output[j] += *b;
         }
         output
     }
 }
 
 fn clipped_relu(v: &[f32]) -> Vec<f32> {
-    v.iter().map(|&x| x.max(0.0).min(1.0)).collect()
+    v.iter().map(|&x| x.clamp(0.0, 1.0)).collect()
 }
 
 fn apply_activation(v: &[f32], activation: &str) -> Vec<f32> {
@@ -87,7 +86,9 @@ fn apply_activation(v: &[f32], activation: &str) -> Vec<f32> {
 
 /// Load weight map from the JSON file.
 /// Format: `[[name, [dim0, dim1, ...], [f0, f1, ...]], ...]`
-fn load_weights(path: &str) -> Result<HashMap<String, (Vec<usize>, Vec<f32>)>> {
+type WeightMap = HashMap<String, (Vec<usize>, Vec<f32>)>;
+
+fn load_weights(path: &str) -> Result<WeightMap> {
     let content = std::fs::read_to_string(path).context("reading weights file")?;
     let raw: Vec<(String, Vec<usize>, Vec<f32>)> =
         serde_json::from_str(&content).context("parsing weights JSON")?;

@@ -186,7 +186,7 @@ impl Visitor for GameVisitor {
         let zobrist: Zobrist64 = new_pos.zobrist_hash(EnPassantMode::Legal);
         let zobrist = format!("{:016x}", zobrist.0);
         let move_number = (self.ply / 2) + 1;
-        let color = if self.ply % 2 == 0 { "white" } else { "black" };
+        let color = if self.ply.is_multiple_of(2) { "white" } else { "black" };
         self.ply += 1;
 
         self.rows.push(MoveRow {

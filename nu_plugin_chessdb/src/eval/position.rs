@@ -789,17 +789,13 @@ fn piece_activity_score(
             if sq.rank() == Rank::Seventh {
                 local += ROOK_SEVENTH_BONUS;
                 rook_on_seventh += 1;
-            } else if sq.rank() == Rank::Eighth {
-                local += 13;
-            } else if sq.rank() == Rank::Sixth {
+            } else if sq.rank() == Rank::Eighth || sq.rank() == Rank::Sixth {
                 local += 13;
             }
         } else if sq.rank() == Rank::Second {
             local += ROOK_SEVENTH_BONUS;
             rook_on_seventh += 1;
-        } else if sq.rank() == Rank::First {
-            local += 13;
-        } else if sq.rank() == Rank::Third {
+        } else if sq.rank() == Rank::First || sq.rank() == Rank::Third {
             local += 13;
         }
         rook_score += local;
@@ -889,7 +885,7 @@ fn king_tropism_score(board: &shakmaty::Board, color: Color) -> i64 {
         } else {
             0
         };
-        score += weight * closeness as i64 / 2;
+        score += weight * closeness / 2;
     }
     score
 }
@@ -1261,10 +1257,12 @@ fn detect_outposts(board: &shakmaty::Board, color: Color) -> (i64, Option<(Squar
             }
         }
 
-        if supported_by_pawn.is_some() {
+        if let Some(p_support) = supported_by_pawn {
             count += 1;
             if example.is_none() {
-                example = Some((sq, board.piece_at(sq).unwrap().role, supported_by_pawn.unwrap()));
+                if let Some(piece) = board.piece_at(sq) {
+                    example = Some((sq, piece.role, p_support));
+                }
             }
         } else {
             // as a fallback, allow squares defended by other pieces
@@ -1272,7 +1270,9 @@ fn detect_outposts(board: &shakmaty::Board, color: Color) -> (i64, Option<(Squar
             if board.attacks_to(sq, color, occ).any() {
                 count += 1;
                 if example.is_none() {
-                    example = Some((sq, board.piece_at(sq).unwrap().role, Square::E1));
+                    if let Some(piece) = board.piece_at(sq) {
+                        example = Some((sq, piece.role, Square::E1));
+                    }
                     // support square unknown; placeholder E1 (we will prefer pawn support in examples)
                 }
             }
@@ -1778,7 +1778,7 @@ pub fn analyze_fen_with_engine_score(
     let groups = compute_groups(&chess, phase, legal_move_count);
     let final_score = sum_groups(&groups);
     let delta = engine_score.map(|score| final_score - score);
-    let sum_groups_match = delta.map_or(true, |d| d == 0);
+    let sum_groups_match = delta.map(|d| d == 0).unwrap_or(true);
 
     Ok(PositionRecord {
         fen: fen.to_string(),

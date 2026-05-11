@@ -142,9 +142,9 @@ impl PluginCommand for ProcessCorpus {
                                         rec.groups.development.blended,
                                         rec.groups.vector_features.blended,
                                         rec.groups.strategic.blended,
-                                        rec.groups.scaling.value as i64,
-                                        rec.groups.drawishness.value as i64,
-                                        rec.groups.override_.value as i64,
+                                        rec.groups.scaling.value,
+                                        rec.groups.drawishness.value,
+                                        rec.groups.override_.value,
                                     ];
                                     let json_str = serde_json::to_string(&arr).unwrap_or_else(|_| "[]".to_string());
                                     (rec.final_score, json_str)
@@ -156,15 +156,15 @@ impl PluginCommand for ProcessCorpus {
                             // so the LLM doesn't have to guess what pieces are left based on the FEN.
                             let board_pieces: String = m_row.fen.chars().take_while(|c| *c != ' ').filter(|c| c.is_alphabetic()).collect();
 
-                            let nnue_score = 0; // To be mapped when NNUE bulk interface is ready
+                            let nnue_score: i64 = 0; // To be mapped when NNUE bulk interface is ready
 
                             let pos_record = record! {
                                 "zobrist" => Value::string(&z_hex, span),
                                 "fen" => Value::string(&m_row.fen, span),
                                 "board_pieces" => Value::string(board_pieces, span),
-                                "hugm_score" => Value::int(hugm_score as i64, span),
+                                "hugm_score" => Value::int(hugm_score, span),
                                 "hugm_eval_arr" => Value::string(&hugm_eval_arr, span),
-                                "nnue_score" => Value::int(nnue_score as i64, span),
+                                "nnue_score" => Value::int(nnue_score, span),
                             };
                             out_positions.push(Value::record(pos_record, span));
                         }
@@ -193,8 +193,8 @@ impl PluginCommand for ProcessCorpus {
                 "source" => Value::string(platform, span),
                 "white" => Value::string(white_name, span),
                 "black" => Value::string(black_name, span),
-                "white_elo" => Value::int(white_elo as i64, span),
-                "black_elo" => Value::int(black_elo as i64, span),
+                "white_elo" => Value::int(white_elo, span),
+                "black_elo" => Value::int(black_elo, span),
                 "result" => Value::string(result_str, span),
                 "played_at" => Value::string(played_at, span),
                 "time_control" => Value::string(time_control, span),
