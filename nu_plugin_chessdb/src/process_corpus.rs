@@ -117,8 +117,8 @@ impl PluginCommand for ProcessCorpus {
                             "zobrist" => Value::string(&initial_zobrist, span),
                             "fen" => Value::string("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", span),
                             "board_pieces" => Value::string("rnbqkbnrppppppppPPPPPPPPRNBQKBNR", span),
-                            "critter_score" => Value::int(0, span),
-                            "critter_eval_arr" => Value::string("[]", span),
+                            "hugm_score" => Value::int(0, span),
+                            "hugm_eval_arr" => Value::string("[]", span),
                             "nnue_score" => Value::int(0, span),
                         };
                         out_positions.push(Value::record(pos_record, span));
@@ -130,7 +130,7 @@ impl PluginCommand for ProcessCorpus {
 
                         if unique_positions.insert(z_hex.clone()) {
                             // On-the-fly Deep Evaluation
-                            let (critter_score, critter_eval_arr) = match analyze_fen_with_engine_score(&m_row.fen, None) {
+                            let (hugm_score, hugm_eval_arr) = match analyze_fen_with_engine_score(&m_row.fen, None) {
                                 Ok(rec) => {
                                     // Serialize the decomposed groups directly into a flat JSON integer array
                                     let arr = vec![
@@ -162,8 +162,8 @@ impl PluginCommand for ProcessCorpus {
                                 "zobrist" => Value::string(&z_hex, span),
                                 "fen" => Value::string(&m_row.fen, span),
                                 "board_pieces" => Value::string(board_pieces, span),
-                                "critter_score" => Value::int(critter_score as i64, span),
-                                "critter_eval_arr" => Value::string(&critter_eval_arr, span),
+                                "hugm_score" => Value::int(hugm_score as i64, span),
+                                "hugm_eval_arr" => Value::string(&hugm_eval_arr, span),
                                 "nnue_score" => Value::int(nnue_score as i64, span),
                             };
                             out_positions.push(Value::record(pos_record, span));

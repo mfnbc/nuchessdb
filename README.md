@@ -6,7 +6,7 @@ A Nushell-first chess database and enrichment pipeline. Import games, analyze pa
 
 - **Queryable Fact Base**: A local SQLite database you can script against directly.
 - **Decomposed Logic**: Move from raw scores (+1.0) to learnable concepts (King Safety, Activity).
-- **Coach's Notebook**: Two-layer annotation (Strategic Static + Tactical Dynamic) powered by RAG and critter deltas.
+- **Coach's Notebook**: Two-layer annotation (Strategic Static + Tactical Dynamic) powered by RAG and HUGM deltas.
 
 ## Quick Start
 
@@ -26,7 +26,7 @@ nu nuchessdb.nu init
 
 **Option A: Sync from chess.com/lichess**
 ```sh
-# Download ALL games with Critter decomposed evaluation
+# Download ALL games with HUGM decomposed evaluation
 nu nuchessdb.nu sync chesscom <your-username>
 
 # Or test with just the latest archive first
@@ -35,11 +35,11 @@ nu nuchessdb.nu sync chesscom <your-username> --smoketest
 
 **Option B: Import from PGN file**
 ```sh
-# Import PGN with Critter decomposed evaluation
+# Import PGN with HUGM decomposed evaluation
 nu nuchessdb.nu import ./data/my_games.pgn chesscom
 ```
 
-**Note:** All imports automatically include Critter evaluation for position analysis. By default, sync downloads ALL game archives (this may take time for accounts with many games).
+**Note:** All imports automatically include HUGM evaluation for position analysis. By default, sync downloads ALL game archives (this may take time for accounts with many games).
 
 ### 4. Analyze Your Games
 ```sh
@@ -55,10 +55,10 @@ nu nuchessdb.nu coach-review 1
 
 ## How it Works
 
-- **`nu_plugin_chessdb`**: Rust plugin for all chess semantics (FEN, hashing, NNUE, critter eval).
+- **`nu_plugin_chessdb`**: Rust plugin for all chess semantics (FEN, hashing, NNUE, HUGM eval).
   - **Batch Processing**: Plugin accepts lists of FENs for efficient parallel processing
   - **Zobrist hashing**: Process thousands of positions in a single call
-  - **Critter evaluation**: Uses Rayon for multi-core parallel analysis
+  - **HUGM evaluation**: Uses Rayon for multi-core parallel analysis
 - **Modules**: Nushell orchestration for sync, reporting, and RAG integration.
   - **List-first design**: All operations work with full lists, not individual items
   - **Smart caching**: Skip evaluation of positions that already exist
@@ -70,9 +70,9 @@ nu nuchessdb.nu coach-review 1
 
 The pipeline is optimized for batch processing:
 - **Zobrist hashing**: Single plugin call for all positions (vs thousands of individual calls)
-- **Critter evaluation**: Batch analysis with internal parallelization (Rayon)
+- **HUGM evaluation**: Batch analysis with internal parallelization (Rayon)
 - **Smart skipping**: Re-imports skip already-evaluated positions
-- **Result**: ~1m50s to import and evaluate 3,425 positions (38 games) with full Critter analysis
+- **Result**: ~1m50s to import and evaluate 3,425 positions (38 games) with full HUGM analysis
 
 ## Core Commands
 
@@ -85,7 +85,7 @@ All commands are run via: `nu nuchessdb.nu <command> [args]`
 | `import <path.pgn> <platform>` | Import PGN file into database |
 | `status` | Database overview (games, positions, evaluations) |
 | `report [limit]` | Performance stats for most-visited positions |
-| `critter-eval [limit]` | Run decomposed structural evaluation queue |
+| `hugm-eval [limit]` | Run decomposed structural evaluation queue |
 | `eco-classify [limit]` | Top positions with ECO opening names |
 | `coach-review <game_id>` | Generate AI-driven game annotations |
 | `recent [limit]` | Show recently imported games |
@@ -126,14 +126,14 @@ For scripting or custom workflows, import modules directly:
 ```nu
 use modules/db.nu *
 use modules/import.nu *
-use modules/critter.nu *
+use modules/hugm.nu *
 
 init-db
 import-pgn-file ./data/games.pgn chesscom
-critter-eval-queue 50
+hugm-eval-queue 50
 ```
 
-**Note:** The `--with-critter` flag has been removed. Critter evaluation is now always enabled by default.
+**Note:** The `--with-hugm` flag has been removed. HUGM evaluation is now always enabled by default.
 
 ## Architecture
 

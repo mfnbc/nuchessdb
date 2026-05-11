@@ -39,8 +39,8 @@ def init-schema [] {
         CREATE TABLE IF NOT EXISTS positions (
             zobrist TEXT PRIMARY KEY,
             fen TEXT UNIQUE,
-            critter_score INTEGER,
-            critter_eval_arr TEXT,
+            hugm_score INTEGER,
+            hugm_eval_arr TEXT,
             nnue_score INTEGER,
             eval_depth INTEGER,
             is_theoretical BOOLEAN DEFAULT 0,
@@ -126,7 +126,7 @@ def import-records [games: list, platform: string, username: string] {
             open $temp_db | query db "SELECT game_id, source, white, black, white_elo, black_elo, result, played_at, time_control, eco, opening FROM temp_games;" | into sqlite $db -t games
         }
         if ($corpus.positions | is-not-empty) {
-            open $temp_db | query db "SELECT zobrist, fen, board_pieces, critter_score, critter_eval_arr, nnue_score FROM temp_positions;" | into sqlite $db -t positions
+            open $temp_db | query db "SELECT zobrist, fen, board_pieces, hugm_score, hugm_eval_arr, nnue_score FROM temp_positions;" | into sqlite $db -t positions
         }
         if ($corpus.moves | is-not-empty) {
             open $temp_db | query db "SELECT game_id, position_id, next_position_id, ply, move_number, color, san, uci FROM temp_moves;" | into sqlite $db -t moves
@@ -139,9 +139,9 @@ def import-records [games: list, platform: string, username: string] {
 # --- 3. Analytics & Intelligence ---
 def analyze-position [fen: string, weights_path: string = "./weights.json"] {
     # Calls the resurrected Rust engine modules
-    let critter = ($fen | chessdb critter-eval)
+    let hugm = ($fen | chessdb hugm-eval)
     let nnue = ($fen | chessdb nnue-eval --weights $weights_path)
-    { critter: $critter, nnue: $nnue }
+    { hugm: $hugm, nnue: $nnue }
 }
 
 def report-moves [zobrist: string] {
@@ -166,8 +166,8 @@ def review-game [game_id: int] {
             m.color, 
             m.san, 
             p.board_pieces,
-            p.critter_score,
-            p.critter_eval_arr
+            p.hugm_score,
+            p.hugm_eval_arr
         FROM moves m
         JOIN positions p ON m.next_position_id = p.zobrist
         WHERE m.game_id = ?
@@ -179,7 +179,7 @@ def review-game [game_id: int] {
     let initial_state = { arr: [0 0 0 0 0 0 0 0 0 0 0], rows: [] }
     
     let processed = ($raw | reduce -f $initial_state { |row, acc|
-        let current_arr = ($row.critter_eval_arr | from json)
+        let current_arr = ($row.hugm_eval_arr | from json)
         let last_arr = $acc.arr
         
         # In engine evaluations, a positive score is good for White and a negative score is good for Black.
@@ -191,7 +191,7 @@ def review-game [game_id: int] {
         let deltas = ($current_arr | zip $last_arr | each { |pair| ($pair.0 - $pair.1) * $multiplier })
         
         # Also map the absolute score to player-relative perspective (so + means winning for the player whose turn it is)
-        let relative_score = $row.critter_score * $multiplier
+        let relative_score = $row.hugm_score * $multiplier
 
         let out_row = {
             ply: $row.ply

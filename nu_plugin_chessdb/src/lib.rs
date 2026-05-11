@@ -1,6 +1,7 @@
 pub mod chess;
 pub mod core;
 pub mod critter_eval_cmd;
+pub mod hugm_eval_cmd;
 pub mod eval;
 pub mod nnue_eval_cmd;
 pub mod pgn_to_fens;
@@ -36,6 +37,7 @@ impl Plugin for ChessdbPlugin {
     // Small, focused command surface including the evaluations
     fn commands(&self) -> Vec<Box<dyn nu_plugin::PluginCommand<Plugin = Self>>> {
         vec![
+            Box::new(hugm_eval_cmd::HugmEval),
             Box::new(critter_eval_cmd::CritterEval),
             Box::new(nnue_eval_cmd::NnueEval),
             Box::new(pgn_to_fens::PgnToBatch),
