@@ -61,3 +61,75 @@ fn lichess_outpost_example() {
         .unwrap_or(0);
     assert!(outposts >= 1, "expected at least one outpost detected");
 }
+
+#[test]
+fn passed_pawn_example() {
+    // Source: Wikipedia / passed pawn examples (adapted)
+    // White pawn on c5 with no opposing pawns ahead should be detected as passed
+    let fen = "4k3/8/8/2P5/8/8/8/4K3 w - - 0 1";
+    let rec = analyze_fen(fen).expect("FEN should parse");
+    let passed = rec
+        .groups
+        .pawn_structure
+        .terms
+        .get("passed")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    assert!(passed >= 1, "expected at least one passed pawn");
+}
+
+#[test]
+fn isolated_pawn_example() {
+    // Source: chessprogramming.org / pawn structure (isolated pawn example adapted)
+    // White pawn isolated on d4 (no adjacent white pawns)
+    let fen = "4k3/8/8/3P4/8/8/8/4K3 w - - 0 1";
+    let rec = analyze_fen(fen).expect("FEN should parse");
+    let isolated = rec
+        .groups
+        .pawn_structure
+        .terms
+        .get("isolated")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    assert!(isolated >= 1, "expected at least one isolated pawn");
+}
+
+#[test]
+fn doubled_rooks_and_rook_on_seventh() {
+    // Source: chessprogramming.org / rook activity
+    // Two rooks doubled on a-file and a rook on the 7th rank
+    let fen = "4k3/R7/8/8/8/8/R7/4K3 w - - 0 1";
+    let rec = analyze_fen(fen).expect("FEN should parse");
+    let doubled = rec
+        .groups
+        .piece_activity
+        .terms
+        .get("doubled_rooks")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let rook_on_seventh = rec
+        .groups
+        .piece_activity
+        .terms
+        .get("rook_on_seventh")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    assert!(doubled >= 1, "expected doubled rooks detected");
+    assert!(rook_on_seventh >= 1, "expected a rook on the seventh");
+}
+
+#[test]
+fn center_control_example() {
+    // Source: chessprogramming.org / center control
+    // White occupies d4 which should give center control
+    let fen = "4k3/8/8/3P4/8/8/8/4K3 w - - 0 1";
+    let rec = analyze_fen(fen).expect("FEN should parse");
+    let cc = rec
+        .groups
+        .vector_features
+        .terms
+        .get("center_control_us")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    assert!(cc > 0, "expected positive center control score");
+}
