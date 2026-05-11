@@ -1141,31 +1141,61 @@ fn tactical_score(board: &shakmaty::Board, us: Color, phase: u8) -> GroupValue {
     // Examples (piece+square strings)
     if let Some((att, targets)) = fork_ex_us {
         let attacker = piece_square_name(board, att);
-        let tnames: Vec<String> = targets.iter().map(|&t| piece_square_name(board, t)).collect();
-        terms.insert("fork_example_us".into(), serde_json::Value::from(format!("{} -> {}", attacker, tnames.join(", "))));
+        let tnames: Vec<serde_json::Value> = targets.iter().map(|&t| serde_json::Value::from(piece_square_name(board, t))).collect();
+        let mut map = serde_json::Map::new();
+        map.insert("attacker".into(), serde_json::Value::from(attacker));
+        map.insert("targets".into(), serde_json::Value::Array(tnames));
+        terms.insert("fork_example_us".into(), serde_json::Value::Object(map));
     }
     if let Some((att, targets)) = fork_ex_them {
         let attacker = piece_square_name(board, att);
-        let tnames: Vec<String> = targets.iter().map(|&t| piece_square_name(board, t)).collect();
-        terms.insert("fork_example_them".into(), serde_json::Value::from(format!("{} -> {}", attacker, tnames.join(", "))));
+        let tnames: Vec<serde_json::Value> = targets.iter().map(|&t| serde_json::Value::from(piece_square_name(board, t))).collect();
+        let mut map = serde_json::Map::new();
+        map.insert("attacker".into(), serde_json::Value::from(attacker));
+        map.insert("targets".into(), serde_json::Value::Array(tnames));
+        terms.insert("fork_example_them".into(), serde_json::Value::Object(map));
     }
     if let Some((att, f, b)) = skewer_ex_us {
-        terms.insert("skewer_example_us".into(), serde_json::Value::from(format!("{}: {} -> {}", piece_square_name(board, att), piece_square_name(board, f), piece_square_name(board, b))));
+        let mut map = serde_json::Map::new();
+        map.insert("attacker".into(), serde_json::Value::from(piece_square_name(board, att)));
+        map.insert("front".into(), serde_json::Value::from(piece_square_name(board, f)));
+        map.insert("back".into(), serde_json::Value::from(piece_square_name(board, b)));
+        terms.insert("skewer_example_us".into(), serde_json::Value::Object(map));
     }
     if let Some((att, f, b)) = skewer_ex_them {
-        terms.insert("skewer_example_them".into(), serde_json::Value::from(format!("{}: {} -> {}", piece_square_name(board, att), piece_square_name(board, f), piece_square_name(board, b))));
+        let mut map = serde_json::Map::new();
+        map.insert("attacker".into(), serde_json::Value::from(piece_square_name(board, att)));
+        map.insert("front".into(), serde_json::Value::from(piece_square_name(board, f)));
+        map.insert("back".into(), serde_json::Value::from(piece_square_name(board, b)));
+        terms.insert("skewer_example_them".into(), serde_json::Value::Object(map));
     }
     if let Some((pinner, pinned, king)) = pin_ex_us {
-        terms.insert("pin_example_us".into(), serde_json::Value::from(format!("{} pins {} to {}", piece_square_name(board, pinner), piece_square_name(board, pinned), piece_square_name(board, king))));
+        let mut map = serde_json::Map::new();
+        map.insert("pinner".into(), serde_json::Value::from(piece_square_name(board, pinner)));
+        map.insert("pinned".into(), serde_json::Value::from(piece_square_name(board, pinned)));
+        map.insert("king".into(), serde_json::Value::from(piece_square_name(board, king)));
+        terms.insert("pin_example_us".into(), serde_json::Value::Object(map));
     }
     if let Some((pinner, pinned, king)) = pin_ex_them {
-        terms.insert("pin_example_them".into(), serde_json::Value::from(format!("{} pins {} to {}", piece_square_name(board, pinner), piece_square_name(board, pinned), piece_square_name(board, king))));
+        let mut map = serde_json::Map::new();
+        map.insert("pinner".into(), serde_json::Value::from(piece_square_name(board, pinner)));
+        map.insert("pinned".into(), serde_json::Value::from(piece_square_name(board, pinned)));
+        map.insert("king".into(), serde_json::Value::from(piece_square_name(board, king)));
+        terms.insert("pin_example_them".into(), serde_json::Value::Object(map));
     }
     if let Some((blocker, slider, target)) = disc_ex_us {
-        terms.insert("discovered_example_us".into(), serde_json::Value::from(format!("{} moves unveils {} attacking {}", piece_square_name(board, blocker), piece_square_name(board, slider), piece_square_name(board, target))));
+        let mut map = serde_json::Map::new();
+        map.insert("blocker".into(), serde_json::Value::from(piece_square_name(board, blocker)));
+        map.insert("slider".into(), serde_json::Value::from(piece_square_name(board, slider)));
+        map.insert("target".into(), serde_json::Value::from(piece_square_name(board, target)));
+        terms.insert("discovered_example_us".into(), serde_json::Value::Object(map));
     }
     if let Some((blocker, slider, target)) = disc_ex_them {
-        terms.insert("discovered_example_them".into(), serde_json::Value::from(format!("{} moves unveils {} attacking {}", piece_square_name(board, blocker), piece_square_name(board, slider), piece_square_name(board, target))));
+        let mut map = serde_json::Map::new();
+        map.insert("blocker".into(), serde_json::Value::from(piece_square_name(board, blocker)));
+        map.insert("slider".into(), serde_json::Value::from(piece_square_name(board, slider)));
+        map.insert("target".into(), serde_json::Value::from(piece_square_name(board, target)));
+        terms.insert("discovered_example_them".into(), serde_json::Value::Object(map));
     }
 
     GroupValue {
@@ -1756,6 +1786,132 @@ pub fn analyze_fen_with_engine_score(
     })
 }
 
+pub fn render_structured_explanations(record: &PositionRecord) -> Vec<serde_json::Value> {
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    let side = if record.side_to_move == "white" { "white" } else { "black" };
+
+    // Helper to create an explanation object
+    let make_obj = |kind: &str, side_str: &str, severity: i64, phrase: String, details: serde_json::Map<String, serde_json::Value>| -> serde_json::Value {
+        let mut obj = serde_json::Map::new();
+        obj.insert("kind".into(), serde_json::Value::from(kind));
+        obj.insert("side".into(), serde_json::Value::from(side_str));
+        obj.insert("severity".into(), serde_json::Value::from(severity));
+        obj.insert("phrase".into(), serde_json::Value::from(phrase));
+        obj.insert("details".into(), serde_json::Value::Object(details));
+        serde_json::Value::Object(obj)
+    };
+
+    // Forks
+    if let Some(val) = record.groups.tactical.terms.get("forks_us") {
+        if let Some(n) = val.as_i64() {
+            if n > 0 {
+                let mut details = serde_json::Map::new();
+                if let Some(ex) = record.groups.tactical.terms.get("fork_example_us") {
+                    details.insert("example".into(), ex.clone());
+                }
+                let phrase = if let Some(ex) = details.get("example").and_then(|v| v.as_str()) {
+                    format!("{} has {} fork(s) detected (e.g. {}).", "White", n, ex)
+                } else {
+                    format!("{} has {} fork(s) detected.", "White", n)
+                };
+                out.push(make_obj("fork", "white", n, phrase, details));
+            }
+        }
+    }
+
+    // Skewers
+    if let Some(val) = record.groups.tactical.terms.get("skewers_us") {
+        if let Some(n) = val.as_i64() {
+            if n > 0 {
+                let mut details = serde_json::Map::new();
+                if let Some(ex) = record.groups.tactical.terms.get("skewer_example_us") {
+                    details.insert("example".into(), ex.clone());
+                }
+                let phrase = if let Some(ex) = details.get("example").and_then(|v| v.as_str()) {
+                    format!("{} has {} skewer(s) detected (e.g. {}).", "White", n, ex)
+                } else {
+                    format!("{} has {} skewer(s) detected.", "White", n)
+                };
+                out.push(make_obj("skewer", "white", n, phrase, details));
+            }
+        }
+    }
+
+    // Pins
+    if let Some(val) = record.groups.tactical.terms.get("pins_us") {
+        if let Some(n) = val.as_i64() {
+            if n > 0 {
+                let mut details = serde_json::Map::new();
+                if let Some(ex) = record.groups.tactical.terms.get("pin_example_us") {
+                    details.insert("example".into(), ex.clone());
+                }
+                let phrase = if let Some(ex) = details.get("example").and_then(|v| v.as_str()) {
+                    format!("{} has {} pin(s) (e.g. {}).", "White", n, ex)
+                } else {
+                    format!("{} has {} pin(s).", "White", n)
+                };
+                out.push(make_obj("pin", "white", n, phrase, details));
+            }
+        }
+    }
+
+    // Discovered
+    if let Some(val) = record.groups.tactical.terms.get("discovered_us") {
+        if let Some(n) = val.as_i64() {
+            if n > 0 {
+                let mut details = serde_json::Map::new();
+                if let Some(ex) = record.groups.tactical.terms.get("discovered_example_us") {
+                    details.insert("example".into(), ex.clone());
+                }
+                let phrase = if let Some(ex) = details.get("example").and_then(|v| v.as_str()) {
+                    format!("{} has {} discovered-attack opportunity(ies) (e.g. {}).", "White", n, ex)
+                } else {
+                    format!("{} has {} discovered-attack opportunity(ies).", "White", n)
+                };
+                out.push(make_obj("discovered", "white", n, phrase, details));
+            }
+        }
+    }
+
+    // Outposts
+    if let Some(val) = record.groups.piece_activity.terms.get("outposts_us") {
+        if let Some(n) = val.as_i64() {
+            if n > 0 {
+                let mut details = serde_json::Map::new();
+                if let Some(ex) = record.groups.piece_activity.terms.get("outpost_example_us") {
+                    details.insert("example".into(), ex.clone());
+                }
+                let phrase = if let Some(ex) = details.get("example").and_then(|v| v.as_str()) {
+                    format!("{} has {} outpost(s) (e.g. {}).", "White", n, ex)
+                } else {
+                    format!("{} has {} outpost(s).", "White", n)
+                };
+                out.push(make_obj("outpost", "white", n, phrase, details));
+            }
+        }
+    }
+
+    // Rook activity examples
+    if let Some(val) = record.groups.piece_activity.terms.get("open_files_controlled") {
+        if let Some(n) = val.as_i64() {
+            if n > 0 {
+                let mut details = serde_json::Map::new();
+                details.insert("count".into(), serde_json::Value::from(n));
+                let phrase = format!("{} controls {} open file(s) with rooks.", "White", n);
+                out.push(make_obj("rook_open_files", "white", n, phrase, details));
+            }
+        }
+    }
+
+    if out.is_empty() {
+        let mut details = serde_json::Map::new();
+        details.insert("msg".into(), serde_json::Value::from("none"));
+        out.push(make_obj("none", "white", 0, "No immediate human-readable issues detected by static HUGM heuristics.".to_string(), details));
+    }
+
+    out
+}
+
 pub fn render_explanations(record: &PositionRecord) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let side = if record.side_to_move == "white" { "White" } else { "Black" };
@@ -1765,8 +1921,18 @@ pub fn render_explanations(record: &PositionRecord) -> Vec<String> {
     if let Some(val) = record.groups.tactical.terms.get("forks_us") {
         if let Some(n) = val.as_i64() {
             if n > 0 {
-                if let Some(ex) = record.groups.tactical.terms.get("fork_example_us").and_then(|v| v.as_str()) {
-                    out.push(format!("{} has {} fork(s) detected (e.g. {}) — check for immediate tactical threats or trade opportunities.", side, n, ex));
+                if let Some(ex) = record.groups.tactical.terms.get("fork_example_us") {
+                    // ex is now an object
+                    if let Some(att) = ex.get("attacker").and_then(|v| v.as_str()) {
+                        if let Some(targets) = ex.get("targets").and_then(|v| v.as_array()) {
+                            let t_str = targets.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(", ");
+                            out.push(format!("{} has {} fork(s) detected (e.g. {} -> {}) — check for immediate tactical threats or trade opportunities.", side, n, att, t_str));
+                        } else {
+                            out.push(format!("{} has {} fork(s) detected (e.g. {}) — check for immediate tactical threats or trade opportunities.", side, n, att));
+                        }
+                    } else if let Some(s) = ex.as_str() {
+                        out.push(format!("{} has {} fork(s) detected (e.g. {}) — check for immediate tactical threats or trade opportunities.", side, n, s));
+                    }
                 } else {
                     out.push(format!("{} has {} fork(s) detected — check for immediate tactical threats or trade opportunities.", side, n));
                 }
@@ -1776,8 +1942,12 @@ pub fn render_explanations(record: &PositionRecord) -> Vec<String> {
     if let Some(val) = record.groups.tactical.terms.get("skewers_us") {
         if let Some(n) = val.as_i64() {
             if n > 0 {
-                if let Some(ex) = record.groups.tactical.terms.get("skewer_example_us").and_then(|v| v.as_str()) {
-                    out.push(format!("{} has {} skewer(s) detected (e.g. {}) — high-value piece may be attacked in-line.", side, n, ex));
+                if let Some(ex) = record.groups.tactical.terms.get("skewer_example_us") {
+                    if let (Some(att), Some(front), Some(back)) = (ex.get("attacker").and_then(|v| v.as_str()), ex.get("front").and_then(|v| v.as_str()), ex.get("back").and_then(|v| v.as_str())) {
+                        out.push(format!("{} has {} skewer(s) detected (e.g. {}: {} -> {}) — high-value piece may be attacked in-line.", side, n, att, front, back));
+                    } else if let Some(s) = ex.as_str() {
+                        out.push(format!("{} has {} skewer(s) detected (e.g. {}) — high-value piece may be attacked in-line.", side, n, s));
+                    }
                 } else {
                     out.push(format!("{} has {} skewer(s) detected — high-value piece may be attacked in-line.", side, n));
                 }
@@ -1787,8 +1957,12 @@ pub fn render_explanations(record: &PositionRecord) -> Vec<String> {
     if let Some(val) = record.groups.tactical.terms.get("pins_us") {
         if let Some(n) = val.as_i64() {
             if n > 0 {
-                if let Some(ex) = record.groups.tactical.terms.get("pin_example_us").and_then(|v| v.as_str()) {
-                    out.push(format!("{} has {} pin(s) (e.g. {}) — consider relieving pressure or trading pinned pieces.", side, n, ex));
+                if let Some(ex) = record.groups.tactical.terms.get("pin_example_us") {
+                    if let (Some(pinner), Some(pinned), Some(king)) = (ex.get("pinner").and_then(|v| v.as_str()), ex.get("pinned").and_then(|v| v.as_str()), ex.get("king").and_then(|v| v.as_str())) {
+                        out.push(format!("{} has {} pin(s) (e.g. {} pins {} to {}) — consider relieving pressure or trading pinned pieces.", side, n, pinner, pinned, king));
+                    } else if let Some(s) = ex.as_str() {
+                        out.push(format!("{} has {} pin(s) (e.g. {}) — consider relieving pressure or trading pinned pieces.", side, n, s));
+                    }
                 } else {
                     out.push(format!("{} has {} pin(s) — consider relieving pressure or trading pinned pieces.", side, n));
                 }
@@ -1798,8 +1972,12 @@ pub fn render_explanations(record: &PositionRecord) -> Vec<String> {
     if let Some(val) = record.groups.tactical.terms.get("discovered_us") {
         if let Some(n) = val.as_i64() {
             if n > 0 {
-                if let Some(ex) = record.groups.tactical.terms.get("discovered_example_us").and_then(|v| v.as_str()) {
-                    out.push(format!("{} has {} discovered-attack opportunity(ies) (e.g. {}) — watch for moves that uncover attacks.", side, n, ex));
+                if let Some(ex) = record.groups.tactical.terms.get("discovered_example_us") {
+                    if let (Some(blocker), Some(slider), Some(target)) = (ex.get("blocker").and_then(|v| v.as_str()), ex.get("slider").and_then(|v| v.as_str()), ex.get("target").and_then(|v| v.as_str())) {
+                        out.push(format!("{} has {} discovered-attack opportunity(ies) (e.g. {} moves unveils {} attacking {}) — watch for moves that uncover attacks.", side, n, blocker, slider, target));
+                    } else if let Some(s) = ex.as_str() {
+                        out.push(format!("{} has {} discovered-attack opportunity(ies) (e.g. {}) — watch for moves that uncover attacks.", side, n, s));
+                    }
                 } else {
                     out.push(format!("{} has {} discovered-attack opportunity(ies) — watch for moves that uncover attacks.", side, n));
                 }
@@ -1811,8 +1989,17 @@ pub fn render_explanations(record: &PositionRecord) -> Vec<String> {
     if let Some(val) = record.groups.tactical.terms.get("forks_them") {
         if let Some(n) = val.as_i64() {
             if n > 0 {
-                if let Some(ex) = record.groups.tactical.terms.get("fork_example_them").and_then(|v| v.as_str()) {
-                    out.push(format!("{} has {} fork(s) (by opponent) (e.g. {}) — consider defensive resources.", opp, n, ex));
+                if let Some(ex) = record.groups.tactical.terms.get("fork_example_them") {
+                    if let Some(att) = ex.get("attacker").and_then(|v| v.as_str()) {
+                        if let Some(targets) = ex.get("targets").and_then(|v| v.as_array()) {
+                            let t_str = targets.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(", ");
+                            out.push(format!("{} has {} fork(s) (by opponent) (e.g. {} -> {}) — consider defensive resources.", opp, n, att, t_str));
+                        } else {
+                            out.push(format!("{} has {} fork(s) (by opponent) (e.g. {}) — consider defensive resources.", opp, n, att));
+                        }
+                    } else if let Some(s) = ex.as_str() {
+                        out.push(format!("{} has {} fork(s) (by opponent) (e.g. {}) — consider defensive resources.", opp, n, s));
+                    }
                 } else {
                     out.push(format!("{} has {} fork(s) (by opponent) — consider defensive resources.", opp, n));
                 }
@@ -1872,8 +2059,12 @@ pub fn render_explanations(record: &PositionRecord) -> Vec<String> {
     if let Some(val) = record.groups.piece_activity.terms.get("outposts_us") {
         if let Some(n) = val.as_i64() {
             if n > 0 {
-                if let Some(ex) = record.groups.piece_activity.terms.get("outpost_example_us").and_then(|v| v.as_str()) {
-                    out.push(format!("{} has {} outpost(s) (e.g. {}) — strong squares often requiring specific plans to challenge.", side, n, ex));
+                if let Some(ex) = record.groups.piece_activity.terms.get("outpost_example_us") {
+                    if let Some(s) = ex.as_str() {
+                        out.push(format!("{} has {} outpost(s) (e.g. {}) — strong squares often requiring specific plans to challenge.", side, n, s));
+                    } else {
+                        out.push(format!("{} has {} outpost(s) (e.g. <example>) — strong squares often requiring specific plans to challenge.", side, n));
+                    }
                 } else {
                     out.push(format!("{} has {} outpost(s) — strong squares often requiring specific plans to challenge.", side, n));
                 }
