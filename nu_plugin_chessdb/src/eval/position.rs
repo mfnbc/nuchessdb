@@ -49,6 +49,7 @@ pub struct EvalGroups {
     pub development: GroupValue,
     pub vector_features: GroupValue,
     pub strategic: GroupValue,
+    pub tactical: GroupValue,
     pub scaling: ScalarValue,
     pub drawishness: ScalarValue,
     pub override_: ScalarValue,
@@ -714,6 +715,8 @@ fn piece_activity_score(
     }
 
     let mut rook_score = 0;
+    let mut open_file_controlled = 0;
+    let mut rook_on_seventh = 0;
     for sq in board.by_color(color) & board.by_role(Role::Rook) {
         let atk = attacks::rook_attacks(sq, occupied);
         let mut local = 0;
@@ -748,9 +751,17 @@ fn piece_activity_score(
         if (atk & board.by_color(color).intersect(board.by_role(Role::Pawn))).count() == 0 {
             local += 15;
         }
+        // Identify open file: file has no pawns of either color
+        let file_mask = Bitboard::from(sq.file());
+        let pawns_on_file = (board.by_role(Role::Pawn) & file_mask).any();
+        if !pawns_on_file {
+            open_file_controlled += 1;
+            local += 25; // GUESS
+        }
         if color.is_white() {
             if sq.rank() == Rank::Seventh {
                 local += 30;
+                rook_on_seventh += 1;
             } else if sq.rank() == Rank::Eighth {
                 local += 13;
             } else if sq.rank() == Rank::Sixth {
@@ -758,12 +769,23 @@ fn piece_activity_score(
             }
         } else if sq.rank() == Rank::Second {
             local += 30;
+            rook_on_seventh += 1;
         } else if sq.rank() == Rank::First {
             local += 13;
         } else if sq.rank() == Rank::Third {
             local += 13;
         }
         rook_score += local;
+    }
+
+    let mut doubled_rooks = 0;
+    for f in 0..8 {
+        let file_mask = Bitboard::from(File::new(f));
+        let cnt = (board.by_color(color) & board.by_role(Role::Rook) & file_mask).count();
+        if cnt >= 2 {
+            doubled_rooks += 1;
+            rook_score += 20; // GUESS
+        }
     }
 
     let mut queen_score = 0;
@@ -797,7 +819,239 @@ fn piece_activity_score(
     terms.insert("rook".into(), serde_json::Value::from(rook_score));
     terms.insert("queen".into(), serde_json::Value::from(queen_score));
     terms.insert("phase".into(), serde_json::Value::from(phase as i64));
+    terms.insert("open_files_controlled".into(), serde_json::Value::from(open_file_controlled));
+    terms.insert("rook_on_seventh".into(), serde_json::Value::from(rook_on_seventh));
+    terms.insert("doubled_rooks".into(), serde_json::Value::from(doubled_rooks));
     (score, terms)
+}
+
+/// Tactical motif detectors and king tropism helpers (pins, forks, skewers, discovered, tropism)
+fn chebyshev_distance(a: Square, b: Square) -> i64 {
+    let df = (a.file() as i32 - b.file() as i32).abs() as i64;
+    let dr = (a.rank() as i32 - b.rank() as i32).abs() as i64;
+    df.max(dr)
+}
+
+fn king_tropism_score(board: &shakmaty::Board, color: Color) -> i64 {
+    let enemy_king = match board.king_of(color.other()) {
+        Some(sq) => sq,
+        None => return 0,
+    };
+    let mut score = 0_i64;
+    for sq in board.by_color(color) {
+        // skip king itself
+        if Some(sq) == board.king_of(color) {
+            continue;
+        }
+        let dist = chebyshev_distance(sq, enemy_king);
+        let closeness = 8 - dist; // 0..8
+        if closeness <= 0 {
+            continue;
+        }
+        // piece weight guess (GUESS)
+        let weight = if (Bitboard::from(sq) & board.by_role(Role::Queen)).any() {
+            90
+        } else if (Bitboard::from(sq) & board.by_role(Role::Rook)).any() {
+            50
+        } else if (Bitboard::from(sq) & board.by_role(Role::Bishop)).any() {
+            35
+        } else if (Bitboard::from(sq) & board.by_role(Role::Knight)).any() {
+            30
+        } else if (Bitboard::from(sq) & board.by_role(Role::Pawn)).any() {
+            10
+        } else {
+            0
+        };
+        score += weight * closeness as i64 / 2;
+    }
+    score
+}
+
+fn detect_pins(board: &shakmaty::Board, color: Color) -> i64 {
+    let king_sq = match board.king_of(color) {
+        Some(sq) => sq,
+        None => return 0,
+    };
+    let occ = board.occupied();
+    let mut pins = 0_i64;
+
+    let sliders = board.by_color(color.other())
+        & (board.by_role(Role::Rook) | board.by_role(Role::Bishop) | board.by_role(Role::Queen));
+
+    for blocker in board.by_color(color) {
+        let occ_minus = occ ^ Bitboard::from(blocker);
+        for s in sliders {
+            let s_bb = Bitboard::from(s);
+            let is_rook = (s_bb & board.by_role(Role::Rook)).any();
+            let is_bishop = (s_bb & board.by_role(Role::Bishop)).any();
+            let is_queen = (s_bb & board.by_role(Role::Queen)).any();
+
+            let mut before = Bitboard::EMPTY;
+            let mut after = Bitboard::EMPTY;
+            if is_rook || is_queen {
+                before |= attacks::rook_attacks(s, occ);
+                after |= attacks::rook_attacks(s, occ_minus);
+            }
+            if is_bishop || is_queen {
+                before |= attacks::bishop_attacks(s, occ);
+                after |= attacks::bishop_attacks(s, occ_minus);
+            }
+
+            let king_before = (before & Bitboard::from(king_sq)).any();
+            let king_after = (after & Bitboard::from(king_sq)).any();
+            if !king_before && king_after {
+                pins += 1;
+                break;
+            }
+        }
+    }
+    pins
+}
+
+fn detect_forks(board: &shakmaty::Board, color: Color) -> i64 {
+    let mut forks = 0_i64;
+    let enemy_bb = board.by_color(color.other());
+    for sq in board.by_color(color) {
+        let attacks = board.attacks_from(sq);
+        let attacked_pieces = attacks & enemy_bb;
+        let mut count = 0;
+        for r in [Role::Queen, Role::Rook, Role::Bishop, Role::Knight, Role::Pawn] {
+            if (attacked_pieces & board.by_role(r)).any() {
+                count += (attacked_pieces & board.by_role(r)).count() as i64;
+            }
+        }
+        if count >= 2 {
+            forks += 1;
+        }
+    }
+    forks
+}
+
+fn detect_skewers(board: &shakmaty::Board, color: Color) -> i64 {
+    let mut skewers = 0_i64;
+    let enemy = color.other();
+    // iterate our sliding pieces
+    for s in board.by_color(color) & (board.by_role(Role::Rook) | board.by_role(Role::Bishop) | board.by_role(Role::Queen)) {
+        let s_bb = Bitboard::from(s);
+        let is_rook = (s_bb & board.by_role(Role::Rook)).any();
+        let is_bishop = (s_bb & board.by_role(Role::Bishop)).any();
+        let is_queen = (s_bb & board.by_role(Role::Queen)).any();
+        let occ = board.occupied();
+        let mut reachable = Bitboard::EMPTY;
+        if is_rook || is_queen {
+            reachable |= attacks::rook_attacks(s, occ);
+        }
+        if is_bishop || is_queen {
+            reachable |= attacks::bishop_attacks(s, occ);
+        }
+        // opponent pieces on reachable squares
+        let opp_pieces = reachable & board.by_color(enemy);
+        if opp_pieces.count() < 2 {
+            continue;
+        }
+        // collect opponent squares and sort by distance
+        let mut sqs: Vec<Square> = opp_pieces.into_iter().collect();
+        sqs.sort_by_key(|&q| chebyshev_distance(s, q));
+        if sqs.len() >= 2 {
+            // value map (lower means less valuable)
+            let val = |sq: Square| {
+                if (Bitboard::from(sq) & board.by_role(Role::Queen)).any() {
+                    900
+                } else if (Bitboard::from(sq) & board.by_role(Role::Rook)).any() {
+                    500
+                } else if (Bitboard::from(sq) & board.by_role(Role::Bishop)).any() {
+                    330
+                } else if (Bitboard::from(sq) & board.by_role(Role::Knight)).any() {
+                    320
+                } else if (Bitboard::from(sq) & board.by_role(Role::Pawn)).any() {
+                    100
+                } else {
+                    0
+                }
+            };
+            let v0 = val(sqs[0]);
+            let v1 = val(sqs[1]);
+            if v0 < v1 {
+                skewers += 1;
+            }
+        }
+    }
+    skewers
+}
+
+fn detect_discovered(board: &shakmaty::Board, color: Color) -> i64 {
+    let occ = board.occupied();
+    let mut discovered = 0_i64;
+    let enemy_bb = board.by_color(color.other());
+    let sliders = board.by_color(color) & (board.by_role(Role::Rook) | board.by_role(Role::Bishop) | board.by_role(Role::Queen));
+
+    for blocker in board.by_color(color) {
+        let occ_minus = occ ^ Bitboard::from(blocker);
+        for s in sliders {
+            let s_bb = Bitboard::from(s);
+            let is_rook = (s_bb & board.by_role(Role::Rook)).any();
+            let is_bishop = (s_bb & board.by_role(Role::Bishop)).any();
+            let is_queen = (s_bb & board.by_role(Role::Queen)).any();
+            let mut before = Bitboard::EMPTY;
+            let mut after = Bitboard::EMPTY;
+            if is_rook || is_queen {
+                before |= attacks::rook_attacks(s, occ);
+                after |= attacks::rook_attacks(s, occ_minus);
+            }
+            if is_bishop || is_queen {
+                before |= attacks::bishop_attacks(s, occ);
+                after |= attacks::bishop_attacks(s, occ_minus);
+            }
+            let newly = (after & enemy_bb) & !before;
+            if newly.any() {
+                discovered += 1;
+                break;
+            }
+        }
+    }
+    discovered
+}
+
+fn tactical_score(board: &shakmaty::Board, us: Color, phase: u8) -> GroupValue {
+    let them = us.other();
+    let pins_us = detect_pins(board, us);
+    let pins_them = detect_pins(board, them);
+    let forks_us = detect_forks(board, us);
+    let forks_them = detect_forks(board, them);
+    let skewers_us = detect_skewers(board, us);
+    let skewers_them = detect_skewers(board, them);
+    let disc_us = detect_discovered(board, us);
+    let disc_them = detect_discovered(board, them);
+
+    // GUESS weights
+    let w_pins = 50_i64;
+    let w_forks = 80_i64;
+    let w_skewers = 40_i64;
+    let w_disc = 60_i64;
+
+    let total_us = pins_us * w_pins + forks_us * w_forks + skewers_us * w_skewers + disc_us * w_disc;
+    let total_them = pins_them * w_pins + forks_them * w_forks + skewers_them * w_skewers + disc_them * w_disc;
+    let blended = total_us - total_them;
+    let (mg, eg) = phase_split(blended, phase);
+
+    let mut terms = serde_json::Map::new();
+    terms.insert("pins_us".into(), serde_json::Value::from(pins_us));
+    terms.insert("pins_them".into(), serde_json::Value::from(pins_them));
+    terms.insert("forks_us".into(), serde_json::Value::from(forks_us));
+    terms.insert("forks_them".into(), serde_json::Value::from(forks_them));
+    terms.insert("skewers_us".into(), serde_json::Value::from(skewers_us));
+    terms.insert("skewers_them".into(), serde_json::Value::from(skewers_them));
+    terms.insert("discovered_us".into(), serde_json::Value::from(disc_us));
+    terms.insert("discovered_them".into(), serde_json::Value::from(disc_them));
+    terms.insert("total_us".into(), serde_json::Value::from(total_us));
+    terms.insert("total_them".into(), serde_json::Value::from(total_them));
+
+    GroupValue {
+        mg,
+        eg,
+        blended,
+        terms,
+    }
 }
 
 /// Center control score: presence and attacks on D4, D5, E4, E5 (centipawns).
@@ -1037,6 +1291,7 @@ fn sum_groups(groups: &EvalGroups) -> i64 {
         + groups.development.blended
         + groups.vector_features.blended
         + groups.strategic.blended
+        + groups.tactical.blended
         + groups.scaling.value
         + groups.drawishness.value
         + groups.override_.value
@@ -1171,10 +1426,19 @@ fn compute_groups(chess: &Chess, phase: u8, legal_move_count: usize) -> EvalGrou
     let (king_mg, king_eg) = phase_split(king_safety, phase);
     king_safety_group.mg = king_mg;
     king_safety_group.eg = king_eg;
-    king_safety_group.blended = king_safety;
+    // augment king safety with king tropism (GUESS weights)
+    let tropism_us = king_tropism_score(board, us);
+    let tropism_them = king_tropism_score(board, them);
+    king_safety_group.blended = king_safety + (tropism_us - tropism_them);
     king_safety_group
         .terms
         .insert("in_check".into(), serde_json::Value::from(in_check));
+    king_safety_group
+        .terms
+        .insert("tropism_us".into(), serde_json::Value::from(tropism_us));
+    king_safety_group
+        .terms
+        .insert("tropism_them".into(), serde_json::Value::from(tropism_them));
 
     let mut passed_pawns = GroupValue::default();
     let passed_total = passed_us - passed_them;
@@ -1211,6 +1475,7 @@ fn compute_groups(chess: &Chess, phase: u8, legal_move_count: usize) -> EvalGrou
 
     let vector_features = vector_features_score(board, us, phase);
     let strategic = strategic_score(board, us, legal_move_count, phase);
+    let tactical = tactical_score(board, us, phase);
 
     let scaling_factor = win_chance_scale(board, &material);
 
@@ -1223,6 +1488,7 @@ fn compute_groups(chess: &Chess, phase: u8, legal_move_count: usize) -> EvalGrou
         development,
         vector_features,
         strategic,
+        tactical,
         scaling: ScalarValue {
             value: 0,
             factor: scaling_factor,
@@ -1352,4 +1618,55 @@ mod tests {
             .terms
             .contains_key("tactical_pressure_us"));
     }
+
+    #[test]
+    fn tactical_pins_detected() {
+        // Black bishop on b4 pins white piece on d2 to king on e1
+        let fen = "7k/8/8/8/1b6/8/3N4/4K3 w - - 0 1";
+        let record = analyze_fen(fen).expect("FEN should parse");
+        assert!(record.groups.tactical.terms.contains_key("pins_us"));
+        let pins_us = record
+            .groups
+            .tactical
+            .terms
+            .get("pins_us")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        assert!(pins_us >= 1);
+    }
+
+    #[test]
+    fn rook_open_file_terms() {
+        // White rook on a1 with no pawns on file -> open file controlled
+        let fen = "8/8/8/8/8/8/8/R3K2k w - - 0 1";
+        let record = analyze_fen(fen).expect("FEN should parse");
+        assert!(record
+            .groups
+            .piece_activity
+            .terms
+            .contains_key("open_files_controlled"));
+        let open_files = record
+            .groups
+            .piece_activity
+            .terms
+            .get("open_files_controlled")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        assert!(open_files >= 1);
+    }
+
+    #[test]
+    fn king_tropism_present() {
+        // White queen close to black king should yield a positive tropism term
+        let record = analyze_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1").expect("FEN should parse");
+        assert!(record.groups.king_safety.terms.contains_key("tropism_us"));
+        let _ = record
+            .groups
+            .king_safety
+            .terms
+            .get("tropism_us")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+    }
 }
+
