@@ -133,3 +133,50 @@ fn center_control_example() {
         .unwrap_or(0);
     assert!(cc > 0, "expected positive center control score");
 }
+
+#[test]
+fn detects_discovered() {
+    // Source: chessprogramming.org / discovered attack example
+    // White rook on a1, pawn on a2 blocking; black queen on a3 -> moving pawn would uncover attack
+    let fen = "7k/8/8/8/8/q7/P7/R3K3 w - - 0 1";
+    let rec = analyze_fen(fen).expect("FEN should parse");
+    let disc = rec
+        .groups
+        .tactical
+        .terms
+        .get("discovered_us")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    assert!(disc >= 1, "expected discovered attack detected");
+}
+
+#[test]
+fn tactical_pressure_rook_aligned_with_king() {
+    // Rook aligned with enemy king on same file should contribute to tactical pressure
+    let fen = "4k3/8/8/8/4R3/8/8/4K3 b - - 0 1";
+    let rec = analyze_fen(fen).expect("FEN should parse");
+    // The vector_features group uses keys relative to side-to-move (us/them). The rook is white while side-to-move is black, so check 'them'.
+    let tp = rec
+        .groups
+        .vector_features
+        .terms
+        .get("tactical_pressure_them")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    assert!(tp > 0, "expected tactical pressure from rook aligned with king (them)");
+}
+
+#[test]
+fn hanging_piece_detection() {
+    // Black pawn on a3 attacks white knight on b2 which is undefended -> hanging
+    let fen = "4k3/8/8/8/8/p7/1N6/4K3 w - - 0 1";
+    let rec = analyze_fen(fen).expect("FEN should parse");
+    let hanging = rec
+        .groups
+        .strategic
+        .terms
+        .get("hanging")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    assert!(hanging >= 1, "expected hanging piece detected");
+}
