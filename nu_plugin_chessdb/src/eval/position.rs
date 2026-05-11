@@ -34,6 +34,9 @@ const PAWN_MAJORITY_WEIGHT: i64 = 20;
 const PAWN_BREAK_WEIGHT: i64 = 30;
 const MINORITY_ATTACK_WEIGHT: i64 = 35;
 
+// Mobility weight (per-square)
+const PIECE_MOBILITY_WEIGHT: i64 = 5;
+
 use once_cell::sync::Lazy;
 use std::sync::RwLock;
 use serde::Deserialize;
@@ -62,6 +65,7 @@ pub struct Weights {
     pub pawn_majority_weight: i64,
     pub pawn_break_weight: i64,
     pub minority_attack_weight: i64,
+    pub piece_mobility_weight: i64,
 }
 
 impl Default for Weights {
@@ -89,6 +93,7 @@ impl Default for Weights {
             pawn_majority_weight: PAWN_MAJORITY_WEIGHT,
             pawn_break_weight: PAWN_BREAK_WEIGHT,
             minority_attack_weight: MINORITY_ATTACK_WEIGHT,
+            piece_mobility_weight: PIECE_MOBILITY_WEIGHT,
         }
     }
 }
@@ -117,6 +122,7 @@ struct PartialWeights {
     pawn_majority_weight: Option<i64>,
     pawn_break_weight: Option<i64>,
     minority_attack_weight: Option<i64>,
+    piece_mobility_weight: Option<i64>,
 }
 
 static WEIGHTS: Lazy<RwLock<Weights>> = Lazy::new(|| RwLock::new(Weights::default()));
@@ -152,6 +158,7 @@ pub fn set_weights_from_file(path: &str) -> Result<(), String> {
     if let Some(v) = p.pawn_majority_weight { w.pawn_majority_weight = v }
     if let Some(v) = p.pawn_break_weight { w.pawn_break_weight = v }
     if let Some(v) = p.minority_attack_weight { w.minority_attack_weight = v }
+    if let Some(v) = p.piece_mobility_weight { w.piece_mobility_weight = v }
     Ok(())
 }
 
@@ -1112,6 +1119,52 @@ fn piece_activity_score(
 
     score += knight_score + bishop_score + rook_score + queen_score;
 
+    // Mobility counters per piece (counts of attacked squares excluding own-occupied squares)
+    let mut knight_mob = 0_i64;
+    let mut bishop_mob = 0_i64;
+    let mut rook_mob = 0_i64;
+    let mut queen_mob = 0_i64;
+    let mut pawn_mob = 0_i64;
+
+    for sq in board.by_color(color) & board.by_role(Role::Knight) {
+        knight_mob += (board.attacks_from(sq) & !board.by_color(color)).count() as i64;
+    }
+    for sq in board.by_color(color) & board.by_role(Role::Bishop) {
+        bishop_mob += (board.attacks_from(sq) & !board.by_color(color)).count() as i64;
+    }
+    for sq in board.by_color(color) & board.by_role(Role::Rook) {
+        rook_mob += (board.attacks_from(sq) & !board.by_color(color)).count() as i64;
+    }
+    for sq in board.by_color(color) & board.by_role(Role::Queen) {
+        queen_mob += (board.attacks_from(sq) & !board.by_color(color)).count() as i64;
+    }
+    for sq in board.by_color(color) & board.by_role(Role::Pawn) {
+        // pawn mobility: forward push if empty + captures
+        let mut m = 0_i64;
+        let file = sq.file();
+        let rank = sq.rank();
+        if let Some(nrank) = if color.is_white() { rank.offset(1) } else { rank.offset(-1) } {
+            let to = Square::from_coords(file, nrank);
+            if (board.occupied() & Bitboard::from(to)) == Bitboard::EMPTY {
+                m += 1;
+            }
+        }
+        for df in [-1_i8, 1_i8] {
+            if let Some(f) = file.offset(df as i32) {
+                if let Some(nrank) = if color.is_white() { rank.offset(1) } else { rank.offset(-1) } {
+                    let to = Square::from_coords(f, nrank);
+                    if (board.by_color(color.other()) & Bitboard::from(to)).any() {
+                        m += 1;
+                    }
+                }
+            }
+        }
+        pawn_mob += m;
+    }
+    let mobility_total = knight_mob + bishop_mob + rook_mob + queen_mob + pawn_mob;
+    let w_mob = WEIGHTS.read().expect("weights lock").piece_mobility_weight;
+    score += mobility_total * w_mob;
+
     let mut terms = serde_json::Map::new();
     terms.insert("knight".into(), serde_json::Value::from(knight_score));
     terms.insert("bishop".into(), serde_json::Value::from(bishop_score));
@@ -1121,6 +1174,12 @@ fn piece_activity_score(
     terms.insert("open_files_controlled".into(), serde_json::Value::from(open_file_controlled));
     terms.insert("rook_on_seventh".into(), serde_json::Value::from(rook_on_seventh));
     terms.insert("doubled_rooks".into(), serde_json::Value::from(doubled_rooks));
+    terms.insert("mobility_total".into(), serde_json::Value::from(mobility_total));
+    terms.insert("mobility_knight".into(), serde_json::Value::from(knight_mob));
+    terms.insert("mobility_bishop".into(), serde_json::Value::from(bishop_mob));
+    terms.insert("mobility_rook".into(), serde_json::Value::from(rook_mob));
+    terms.insert("mobility_queen".into(), serde_json::Value::from(queen_mob));
+    terms.insert("mobility_pawn".into(), serde_json::Value::from(pawn_mob));
     (score, terms)
 }
 
