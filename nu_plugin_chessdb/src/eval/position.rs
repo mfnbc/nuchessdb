@@ -909,18 +909,30 @@ fn detect_pins(board: &shakmaty::Board, color: Color) -> i64 {
 }
 
 fn detect_forks(board: &shakmaty::Board, color: Color) -> i64 {
+    // Improved fork detection: require attacking >=2 enemy pieces and prefer forks
+    // that include at least one high-value target (queen/rook).
     let mut forks = 0_i64;
     let enemy_bb = board.by_color(color.other());
     for sq in board.by_color(color) {
         let attacks = board.attacks_from(sq);
         let attacked_pieces = attacks & enemy_bb;
-        let mut count = 0;
-        for r in [Role::Queen, Role::Rook, Role::Bishop, Role::Knight, Role::Pawn] {
-            if (attacked_pieces & board.by_role(r)).any() {
-                count += (attacked_pieces & board.by_role(r)).count() as i64;
-            }
+        if attacked_pieces.count() < 2 {
+            continue;
         }
-        if count >= 2 {
+        // sum values of attacked pieces (GUESS values)
+        let mut sum = 0_i64;
+        for (role, val) in [
+            (Role::Queen, 900_i64),
+            (Role::Rook, 500_i64),
+            (Role::Bishop, 330_i64),
+            (Role::Knight, 320_i64),
+            (Role::Pawn, 100_i64),
+        ] {
+            let cnt = (attacked_pieces & board.by_role(role)).count() as i64;
+            sum += cnt * val;
+        }
+        // Count as fork when at least two pieces attacked and combined value above threshold
+        if sum >= 500 || attacked_pieces.count() >= 3 {
             forks += 1;
         }
     }
@@ -928,51 +940,83 @@ fn detect_forks(board: &shakmaty::Board, color: Color) -> i64 {
 }
 
 fn detect_skewers(board: &shakmaty::Board, color: Color) -> i64 {
+    // Ray-scan method: for each sliding piece, walk rays and collect opponent pieces in order.
     let mut skewers = 0_i64;
     let enemy = color.other();
-    // iterate our sliding pieces
+    let directions: &[(i8, i8)] = &[
+        (1, 0),
+        (-1, 0),
+        (0, 1),
+        (0, -1),
+        (1, 1),
+        (-1, 1),
+        (1, -1),
+        (-1, -1),
+    ];
+
     for s in board.by_color(color) & (board.by_role(Role::Rook) | board.by_role(Role::Bishop) | board.by_role(Role::Queen)) {
         let s_bb = Bitboard::from(s);
         let is_rook = (s_bb & board.by_role(Role::Rook)).any();
         let is_bishop = (s_bb & board.by_role(Role::Bishop)).any();
         let is_queen = (s_bb & board.by_role(Role::Queen)).any();
-        let occ = board.occupied();
-        let mut reachable = Bitboard::EMPTY;
-        if is_rook || is_queen {
-            reachable |= attacks::rook_attacks(s, occ);
-        }
-        if is_bishop || is_queen {
-            reachable |= attacks::bishop_attacks(s, occ);
-        }
-        // opponent pieces on reachable squares
-        let opp_pieces = reachable & board.by_color(enemy);
-        if opp_pieces.count() < 2 {
-            continue;
-        }
-        // collect opponent squares and sort by distance
-        let mut sqs: Vec<Square> = opp_pieces.into_iter().collect();
-        sqs.sort_by_key(|&q| chebyshev_distance(s, q));
-        if sqs.len() >= 2 {
-            // value map (lower means less valuable)
-            let val = |sq: Square| {
-                if (Bitboard::from(sq) & board.by_role(Role::Queen)).any() {
-                    900
-                } else if (Bitboard::from(sq) & board.by_role(Role::Rook)).any() {
-                    500
-                } else if (Bitboard::from(sq) & board.by_role(Role::Bishop)).any() {
-                    330
-                } else if (Bitboard::from(sq) & board.by_role(Role::Knight)).any() {
-                    320
-                } else if (Bitboard::from(sq) & board.by_role(Role::Pawn)).any() {
-                    100
-                } else {
-                    0
+
+        for (df, dr) in directions {
+            // skip directions inappropriate for piece
+            if !is_queen {
+                if is_rook && *dr != 0 && *df != 0 {
+                    continue;
                 }
-            };
-            let v0 = val(sqs[0]);
-            let v1 = val(sqs[1]);
-            if v0 < v1 {
-                skewers += 1;
+                if is_bishop && (*dr == 0 || *df == 0) {
+                    continue;
+                }
+            }
+
+            // walk the ray
+            let mut found: Vec<Square> = Vec::new();
+            let mut cur_file = s.file();
+            let mut cur_rank = s.rank();
+            loop {
+                if let Some(nf) = cur_file.offset(*df as i32) {
+                    if let Some(nr) = cur_rank.offset(*dr as i32) {
+                        cur_file = nf;
+                        cur_rank = nr;
+                        let sq = Square::from_coords(cur_file, cur_rank);
+                        if (board.by_color(enemy) & Bitboard::from(sq)).any() {
+                            found.push(sq);
+                            // continue scanning to see behind pieces
+                        }
+                        if (board.occupied() & Bitboard::from(sq)).any() {
+                            // blocked by any piece - but we still recorded opponent pieces
+                            // continue to next square to capture pieces behind (we allow scanning beyond blockers)
+                            // Note: we do not stop here to find multiple opponent pieces in ray
+                        }
+                        continue;
+                    }
+                }
+                break;
+            }
+
+            if found.len() >= 2 {
+                let val = |sq: Square| {
+                    if (Bitboard::from(sq) & board.by_role(Role::Queen)).any() {
+                        900
+                    } else if (Bitboard::from(sq) & board.by_role(Role::Rook)).any() {
+                        500
+                    } else if (Bitboard::from(sq) & board.by_role(Role::Bishop)).any() {
+                        330
+                    } else if (Bitboard::from(sq) & board.by_role(Role::Knight)).any() {
+                        320
+                    } else if (Bitboard::from(sq) & board.by_role(Role::Pawn)).any() {
+                        100
+                    } else {
+                        0
+                    }
+                };
+                let v0 = val(found[0]);
+                let v1 = val(found[1]);
+                if v0 > v1 {
+                    skewers += 1;
+                }
             }
         }
     }
@@ -1023,11 +1067,21 @@ fn tactical_score(board: &shakmaty::Board, us: Color, phase: u8) -> GroupValue {
     let disc_us = detect_discovered(board, us);
     let disc_them = detect_discovered(board, them);
 
-    // GUESS weights
-    let w_pins = 50_i64;
-    let w_forks = 80_i64;
-    let w_skewers = 40_i64;
-    let w_disc = 60_i64;
+    // GUESS base weights
+    let base_w_pins = 50_i64;
+    let base_w_forks = 80_i64;
+    let base_w_skewers = 40_i64;
+    let base_w_disc = 60_i64;
+
+    // Phase scaling: more tactical emphasis in earlier/middlegame when phase is higher.
+    // scale = (phase + 8) / 40 -> range approx 0.2..1.0 (integer math: multiply before dividing)
+    let phase_factor_num = i64::from(phase) + 8; // numerator
+    let phase_factor_den = 40_i64; // denominator
+
+    let w_pins = base_w_pins * phase_factor_num / phase_factor_den;
+    let w_forks = base_w_forks * phase_factor_num / phase_factor_den;
+    let w_skewers = base_w_skewers * phase_factor_num / phase_factor_den;
+    let w_disc = base_w_disc * phase_factor_num / phase_factor_den;
 
     let total_us = pins_us * w_pins + forks_us * w_forks + skewers_us * w_skewers + disc_us * w_disc;
     let total_them = pins_them * w_pins + forks_them * w_forks + skewers_them * w_skewers + disc_them * w_disc;
@@ -1657,7 +1711,7 @@ mod tests {
 
     #[test]
     fn king_tropism_present() {
-        // White queen close to black king should yield a positive tropism term
+        // Ensure king_tropism term present in a normal position (non-zero phase)
         let record = analyze_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1").expect("FEN should parse");
         assert!(record.groups.king_safety.terms.contains_key("tropism_us"));
         let _ = record
@@ -1667,6 +1721,36 @@ mod tests {
             .get("tropism_us")
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
+    }
+
+    #[test]
+    fn detects_skewer() {
+        // White rook on a1 attacking black queen on a2 with black rook on a3 behind -> skewer
+        let fen = "7k/8/8/8/8/r7/q7/R3K3 w - - 0 1";
+        let record = analyze_fen(fen).expect("FEN should parse");
+        let skewers_us = record
+            .groups
+            .tactical
+            .terms
+            .get("skewers_us")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        assert!(skewers_us >= 1);
+    }
+
+    #[test]
+    fn detects_fork() {
+        // White knight on d5 attacking black rook on b6 and black queen on f6
+        let fen = "7k/8/1r3q2/3N4/8/8/8/4K3 w - - 0 1";
+        let record = analyze_fen(fen).expect("FEN should parse");
+        let forks_us = record
+            .groups
+            .tactical
+            .terms
+            .get("forks_us")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        assert!(forks_us >= 1);
     }
 }
 
