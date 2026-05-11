@@ -29,6 +29,11 @@ const VAL_BISHOP: i64 = 330;
 const VAL_KNIGHT: i64 = 320;
 const VAL_PAWN: i64 = 100;
 
+// Pawn-structure default weights
+const PAWN_MAJORITY_WEIGHT: i64 = 20;
+const PAWN_BREAK_WEIGHT: i64 = 30;
+const MINORITY_ATTACK_WEIGHT: i64 = 35;
+
 use once_cell::sync::Lazy;
 use std::sync::RwLock;
 use serde::Deserialize;
@@ -54,6 +59,9 @@ pub struct Weights {
     pub val_bishop: i64,
     pub val_knight: i64,
     pub val_pawn: i64,
+    pub pawn_majority_weight: i64,
+    pub pawn_break_weight: i64,
+    pub minority_attack_weight: i64,
 }
 
 impl Default for Weights {
@@ -78,6 +86,9 @@ impl Default for Weights {
             val_bishop: VAL_BISHOP,
             val_knight: VAL_KNIGHT,
             val_pawn: VAL_PAWN,
+            pawn_majority_weight: PAWN_MAJORITY_WEIGHT,
+            pawn_break_weight: PAWN_BREAK_WEIGHT,
+            minority_attack_weight: MINORITY_ATTACK_WEIGHT,
         }
     }
 }
@@ -103,6 +114,9 @@ struct PartialWeights {
     val_bishop: Option<i64>,
     val_knight: Option<i64>,
     val_pawn: Option<i64>,
+    pawn_majority_weight: Option<i64>,
+    pawn_break_weight: Option<i64>,
+    minority_attack_weight: Option<i64>,
 }
 
 static WEIGHTS: Lazy<RwLock<Weights>> = Lazy::new(|| RwLock::new(Weights::default()));
@@ -131,6 +145,9 @@ pub fn set_weights_from_file(path: &str) -> Result<(), String> {
     if let Some(v) = p.val_bishop { w.val_bishop = v }
     if let Some(v) = p.val_knight { w.val_knight = v }
     if let Some(v) = p.val_pawn { w.val_pawn = v }
+    if let Some(v) = p.pawn_majority_weight { w.pawn_majority_weight = v }
+    if let Some(v) = p.pawn_break_weight { w.pawn_break_weight = v }
+    if let Some(v) = p.minority_attack_weight { w.minority_attack_weight = v }
     Ok(())
 }
 
@@ -580,6 +597,109 @@ fn pawn_structure_score(
     );
     terms.insert("passed".into(), serde_json::Value::from(passed));
     terms.insert("islands".into(), serde_json::Value::from(islands));
+
+    // --- Pawn-majority / flank counts ---
+    let mut own_files_count = [0_i64; 8];
+    let mut opp_files_count = [0_i64; 8];
+    for f in 0..8 {
+        let file_mask = Bitboard::from(File::new(f));
+        let idx = f as usize;
+        own_files_count[idx] = (own & file_mask).count() as i64;
+        opp_files_count[idx] = (opp & file_mask).count() as i64;
+    }
+    let own_qs = own_files_count[0] + own_files_count[1] + own_files_count[2];
+    let opp_qs = opp_files_count[0] + opp_files_count[1] + opp_files_count[2];
+    let own_center = own_files_count[3] + own_files_count[4];
+    let opp_center = opp_files_count[3] + opp_files_count[4];
+    let own_ks = own_files_count[5] + own_files_count[6] + own_files_count[7];
+    let opp_ks = opp_files_count[5] + opp_files_count[6] + opp_files_count[7];
+
+    terms.insert("queenside_count".into(), serde_json::Value::from(own_qs));
+    terms.insert("queenside_opp".into(), serde_json::Value::from(opp_qs));
+    terms.insert("center_count".into(), serde_json::Value::from(own_center));
+    terms.insert("center_opp".into(), serde_json::Value::from(opp_center));
+    terms.insert("kingside_count".into(), serde_json::Value::from(own_ks));
+    terms.insert("kingside_opp".into(), serde_json::Value::from(opp_ks));
+
+    let w = WEIGHTS.read().expect("weights lock");
+    let maj_qs = own_qs - opp_qs;
+    let maj_center = own_center - opp_center;
+    let maj_ks = own_ks - opp_ks;
+    score += maj_qs * w.pawn_majority_weight + maj_center * w.pawn_majority_weight + maj_ks * w.pawn_majority_weight;
+
+    terms.insert(
+        "majority_queenside".into(),
+        serde_json::Value::from(if own_qs > opp_qs { 1 } else { 0 }),
+    );
+    terms.insert(
+        "majority_center".into(),
+        serde_json::Value::from(if own_center > opp_center { 1 } else { 0 }),
+    );
+    terms.insert(
+        "majority_kingside".into(),
+        serde_json::Value::from(if own_ks > opp_ks { 1 } else { 0 }),
+    );
+
+    // --- Pawn-break detection (simple passed-pawn creating pushes/captures) ---
+    let mut break_count = 0_i64;
+    let mut break_examples: Vec<serde_json::Value> = Vec::new();
+    let opp_pawns_bb = board.by_color(color.other()) & board.by_role(Role::Pawn);
+    for sq in own {
+        let file = sq.file();
+        let rank = sq.rank();
+        // push one
+        if let Some(next_rank) = if color.is_white() { rank.offset(1) } else { rank.offset(-1) } {
+            let to = Square::from_coords(file, next_rank);
+            if (board.occupied() & Bitboard::from(to)) == Bitboard::EMPTY {
+                let front = in_front(color, to);
+                if (opp_pawns_bb & front) == Bitboard::EMPTY {
+                    break_count += 1;
+                    let mut map = serde_json::Map::new();
+                    map.insert("pawn".into(), serde_json::Value::from(piece_square_name(board, sq)));
+                    map.insert("to".into(), serde_json::Value::from(to.to_string()));
+                    map.insert("kind".into(), serde_json::Value::from("push"));
+                    break_examples.push(serde_json::Value::Object(map));
+                }
+            }
+        }
+        // captures
+        for df in [-1_i8, 1_i8] {
+            if let Some(f) = file.offset(df as i32) {
+                if let Some(next_rank) = if color.is_white() { rank.offset(1) } else { rank.offset(-1) } {
+                    let to = Square::from_coords(f, next_rank);
+                    if (board.by_color(color.other()) & Bitboard::from(to)).any() {
+                        let front = in_front(color, to);
+                        if (opp_pawns_bb & front) == Bitboard::EMPTY {
+                            break_count += 1;
+                            let mut map = serde_json::Map::new();
+                            map.insert("pawn".into(), serde_json::Value::from(piece_square_name(board, sq)));
+                            map.insert("to".into(), serde_json::Value::from(to.to_string()));
+                            map.insert("kind".into(), serde_json::Value::from("capture"));
+                            break_examples.push(serde_json::Value::Object(map));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    score += break_count * w.pawn_break_weight;
+    terms.insert("pawn_breaks".into(), serde_json::Value::from(break_count));
+    if !break_examples.is_empty() {
+        terms.insert("pawn_break_examples".into(), serde_json::Value::Array(break_examples));
+    }
+
+    // --- Minority attack potential (simple heuristic) ---
+    let mut minority_flag = 0_i64;
+    if own_qs > opp_qs && opp_files_count[1] > 0 && (opp_files_count[0] > 0 || opp_files_count[2] > 0) {
+        minority_flag = 1;
+        score += w.minority_attack_weight;
+        let mut m = serde_json::Map::new();
+        m.insert("flank".into(), serde_json::Value::from("queenside"));
+        m.insert("ours".into(), serde_json::Value::from(own_qs));
+        m.insert("theirs".into(), serde_json::Value::from(opp_qs));
+        terms.insert("minority_attack_example".into(), serde_json::Value::Object(m));
+    }
+    terms.insert("minority_attack".into(), serde_json::Value::from(minority_flag));
 
     (score, terms)
 }
