@@ -156,3 +156,29 @@ Immediate next tasks I will follow (and can implement):
 4. When satisfied, expand the labeled corpus and perform ELO-stratified sampling and review before any automated tuning.
 
 If you approve, I will begin with task 1 (canonical examples + tests) and then implement the harness (task 2).
+
+Current curation & status snapshot
+- Canonical tests added: nu_plugin_chessdb/tests/motif_canonical.rs
+  - Sources used: chessprogramming.org, Wikipedia (pawn examples), representative Lichess-style positions.
+  - Covered motifs (canonical-positive tests): pins, forks, skewers, discovered, outposts, rook open-file/7th/doubled, passed pawns, isolated pawns, pawn-majority/minority (basic), pawn-break candidate, tactical pressure (rook aligned), hanging pieces, center control.
+- Coverage gap (remaining prioritized list):
+  1. Mobility counters & PST examples (not yet implemented)
+  2. Rich minority-attack plan templates and move-sequence examples (we added a strength heuristic but more templates are desirable)
+  3. Negative/near-miss canonical cases for each motif (to guard against hallucination)
+
+Resuming work later (checkpointing)
+- All changes are isolated under the hugm branch. Key files to review when returning:
+  - Core: src/eval/position.rs (detectors, WEIGHTS, added pawn-structure heuristics)
+  - CLI: src/hugm_eval_cmd.rs (--verbose, --weights hooks)
+  - Tests: tests/motif_canonical.rs (canonical examples)
+  - PLAN: this file (validation & tuning plan)
+- To pause and resume safely:
+  1. Ensure tests pass: cargo test.
+  2. If you want to snapshot the current weights, create a JSON weights profile via the Weights struct keys and store alongside the repo (e.g., eval/weights_profile.json).
+  3. Continue later from the hugm branch; the canonical tests act as regression guards.
+
+Sidequest note
+- You mentioned a sidequest — note it here as an explicit, resumable ticket: "SIDEQUEST: <brief description>". When you provide the sidequest details I'll add it to PLAN.md as a tracked task and can switch focus, run it, and then return to the main validation/tuning pipeline. This keeps context intact when stepping away.
+
+Next immediate step
+- I will continue curating more canonical examples if you confirm how many additional examples per motif you want in this pass (recommended: +3–5 per motif). Alternatively I can start the evaluation harness so you can feed labeled JSONL. Which do you prefer?

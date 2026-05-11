@@ -87,7 +87,7 @@ impl PluginCommand for HugmEval {
                 ))
             }
             Value::List { vals, .. } => {
-                // List of FEN strings - process in parallel using Rayon
+                // List of FEN strings - process in parallel using Rayon but surface deterministic errors
                 let fens: Result<Vec<String>, LabeledError> = vals
                     .iter()
                     .map(|v| {
@@ -98,14 +98,13 @@ impl PluginCommand for HugmEval {
                     .collect();
                 let fens = fens?;
 
-                // Parallel evaluation using Rayon
-                let results: Vec<Value> = fens
+                // Parallel evaluation: produce per-item Result<Value, LabeledError>
+                let results_res: Vec<Result<Value, LabeledError>> = fens
                     .par_iter()
-                    .filter_map(|fen| {
-                        crate::eval::analyze_fen_with_engine_score(fen, engine_score)
-                            .ok()
-                            .and_then(|record| {
-                                let mut json_val = serde_json::to_value(&record).ok()?;
+                    .map(|fen| {
+                        match crate::eval::analyze_fen_with_engine_score(fen, engine_score) {
+                            Ok(record) => {
+                                let mut json_val = serde_json::to_value(&record).map_err(|e| LabeledError::new(e.to_string()).with_label("serialization error", span))?;
                                 if include_verbose {
                                     let expl = crate::eval::render_explanations(&record);
                                     if let serde_json::Value::Object(ref mut map) = json_val {
@@ -114,12 +113,21 @@ impl PluginCommand for HugmEval {
                                         map.insert("explanations_structured".to_string(), serde_json::Value::Array(structured));
                                     }
                                 }
-                                serde_json::to_string(&json_val).ok()
-                            })
-                            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-                            .map(|json_val| crate::utils::json_to_nu_value(json_val, span))
+                                Ok(crate::utils::json_to_nu_value(json_val, span))
+                            }
+                            Err(e) => Err(LabeledError::new(e.to_string()).with_label("eval error", span)),
+                        }
                     })
                     .collect();
+
+                // If any item failed, return the first error (fail-fast for deterministic errors)
+                let mut results: Vec<Value> = Vec::with_capacity(results_res.len());
+                for r in results_res {
+                    match r {
+                        Ok(v) => results.push(v),
+                        Err(e) => return Err(e),
+                    }
+                }
 
                 Ok(PipelineData::Value(Value::list(results, span), None))
             }

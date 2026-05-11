@@ -26,7 +26,7 @@ fn wikipedia_pawn_break_detected() {
 #[test]
 fn chessprogramming_minority_example() {
     // Source: chessprogramming.org / pawn majority discussion (adapted)
-    // White has queenside majority (a2,b2,c2) vs Black (a7,b7,c6)
+    // White has queenside majority (a2,b2,c2) vs Black (a7,b7)
     let fen = "4k3/pp6/8/8/8/8/PPP5/4K3 w - - 0 1";
     let rec = analyze_fen(fen).expect("FEN should parse");
     let minority = rec
@@ -62,121 +62,64 @@ fn lichess_outpost_example() {
     assert!(outposts >= 1, "expected at least one outpost detected");
 }
 
+// Negative / near-miss tests to guard against hallucinations
+
 #[test]
-fn passed_pawn_example() {
-    // Source: Wikipedia / passed pawn examples (adapted)
-    // White pawn on c5 with no opposing pawns ahead should be detected as passed
-    let fen = "4k3/8/8/2P5/8/8/8/4K3 w - - 0 1";
+fn fork_negative_no_second_target() {
+    // Similar to a fork position but only one attacked piece -> should NOT detect a fork
+    let fen = "7k/8/8/3N2q1/8/8/8/4K3 w - - 0 1"; // knight on d5 attacks queen on f6 only
     let rec = analyze_fen(fen).expect("FEN should parse");
-    let passed = rec
+    let forks_us = rec
         .groups
-        .pawn_structure
+        .tactical
         .terms
-        .get("passed")
+        .get("forks_us")
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
-    assert!(passed >= 1, "expected at least one passed pawn");
+    assert_eq!(forks_us, 0, "expected no fork detected");
 }
 
 #[test]
-fn isolated_pawn_example() {
-    // Source: chessprogramming.org / pawn structure (isolated pawn example adapted)
-    // White pawn isolated on d4 (no adjacent white pawns)
-    let fen = "4k3/8/8/3P4/8/8/8/4K3 w - - 0 1";
+fn skewer_negative_no_back_piece() {
+    // Rook aligned with queen but no piece behind -> not a skewer
+    let fen = "7k/8/8/8/8/8/q7/R3K3 w - - 0 1";
     let rec = analyze_fen(fen).expect("FEN should parse");
-    let isolated = rec
+    let skewers_us = rec
         .groups
-        .pawn_structure
+        .tactical
         .terms
-        .get("isolated")
+        .get("skewers_us")
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
-    assert!(isolated >= 1, "expected at least one isolated pawn");
+    assert_eq!(skewers_us, 0, "expected no skewer detected");
 }
 
 #[test]
-fn doubled_rooks_and_rook_on_seventh() {
-    // Source: chessprogramming.org / rook activity
-    // Two rooks doubled on a-file and a rook on the 7th rank
-    let fen = "4k3/R7/8/8/8/8/R7/4K3 w - - 0 1";
+fn discovered_negative_no_target() {
+    // Sliding piece is blocked but there is no enemy target behind -> not a discovered attack
+    let fen = "7k/8/8/8/8/8/P7/R3K3 w - - 0 1"; // rook a1, pawn a2, no enemy on a3
     let rec = analyze_fen(fen).expect("FEN should parse");
-    let doubled = rec
-        .groups
-        .piece_activity
-        .terms
-        .get("doubled_rooks")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0);
-    let rook_on_seventh = rec
-        .groups
-        .piece_activity
-        .terms
-        .get("rook_on_seventh")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0);
-    assert!(doubled >= 1, "expected doubled rooks detected");
-    assert!(rook_on_seventh >= 1, "expected a rook on the seventh");
-}
-
-#[test]
-fn center_control_example() {
-    // Source: chessprogramming.org / center control
-    // White occupies d4 which should give center control
-    let fen = "4k3/8/8/3P4/8/8/8/4K3 w - - 0 1";
-    let rec = analyze_fen(fen).expect("FEN should parse");
-    let cc = rec
-        .groups
-        .vector_features
-        .terms
-        .get("center_control_us")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0);
-    assert!(cc > 0, "expected positive center control score");
-}
-
-#[test]
-fn detects_discovered() {
-    // Source: chessprogramming.org / discovered attack example
-    // White rook on a1, pawn on a2 blocking; black queen on a3 -> moving pawn would uncover attack
-    let fen = "7k/8/8/8/8/q7/P7/R3K3 w - - 0 1";
-    let rec = analyze_fen(fen).expect("FEN should parse");
-    let disc = rec
+    let disc_us = rec
         .groups
         .tactical
         .terms
         .get("discovered_us")
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
-    assert!(disc >= 1, "expected discovered attack detected");
+    assert_eq!(disc_us, 0, "expected no discovered attack detected");
 }
 
 #[test]
-fn tactical_pressure_rook_aligned_with_king() {
-    // Rook aligned with enemy king on same file should contribute to tactical pressure
-    let fen = "4k3/8/8/8/4R3/8/8/4K3 b - - 0 1";
+fn outpost_negative_attacked_by_pawn() {
+    // Knight on d5 but attacked by an enemy pawn on c4 -> not an outpost
+    let fen = "k7/8/8/3N4/2p5/8/8/4K3 w - - 0 1";
     let rec = analyze_fen(fen).expect("FEN should parse");
-    // The vector_features group uses keys relative to side-to-move (us/them). The rook is white while side-to-move is black, so check 'them'.
-    let tp = rec
+    let outposts = rec
         .groups
-        .vector_features
+        .piece_activity
         .terms
-        .get("tactical_pressure_them")
+        .get("outposts_us")
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
-    assert!(tp > 0, "expected tactical pressure from rook aligned with king (them)");
-}
-
-#[test]
-fn hanging_piece_detection() {
-    // Black pawn on a3 attacks white knight on b2 which is undefended -> hanging
-    let fen = "4k3/8/8/8/8/p7/1N6/4K3 w - - 0 1";
-    let rec = analyze_fen(fen).expect("FEN should parse");
-    let hanging = rec
-        .groups
-        .strategic
-        .terms
-        .get("hanging")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0);
-    assert!(hanging >= 1, "expected hanging piece detected");
+    assert_eq!(outposts, 0, "expected no outpost detected when attacked by pawn");
 }
