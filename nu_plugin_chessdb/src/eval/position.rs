@@ -1176,6 +1176,63 @@ fn tactical_score(board: &shakmaty::Board, us: Color, phase: u8) -> GroupValue {
     }
 }
 
+fn detect_outposts(board: &shakmaty::Board, color: Color) -> (i64, Option<(Square, Role, Square)>) {
+    // Detect outposts: own Knight/Bishop on an advanced square that is not attackable by opponent pawns
+    // and is supported by an own pawn (preferred). Returns (count, example(attacker_sq, role, support_sq)).
+    let mut count = 0_i64;
+    let mut example: Option<(Square, Role, Square)> = None;
+    let enemy_pawn_attacks = pawn_attack_mask(board, color.other());
+
+    let pieces = board.by_color(color) & (board.by_role(Role::Knight) | board.by_role(Role::Bishop));
+
+    for sq in pieces {
+        // advanced condition: for white rank >= 4 (0-indexed >=3), for black rank <= 4
+        let rank_idx = u32::from(sq.rank());
+        if color.is_white() {
+            if rank_idx < 3 {
+                continue;
+            }
+        } else {
+            if rank_idx > 4 {
+                continue;
+            }
+        }
+
+        // must not be attackable by enemy pawns
+        if (enemy_pawn_attacks & Bitboard::from(sq)) != Bitboard::EMPTY {
+            continue;
+        }
+
+        // check if supported by own pawn (preferred)
+        let mut supported_by_pawn: Option<Square> = None;
+        for p in board.by_color(color) & board.by_role(Role::Pawn) {
+            if (attacks::pawn_attacks(color, p) & Bitboard::from(sq)).any() {
+                supported_by_pawn = Some(p);
+                break;
+            }
+        }
+
+        if supported_by_pawn.is_some() {
+            count += 1;
+            if example.is_none() {
+                example = Some((sq, board.piece_at(sq).unwrap().role, supported_by_pawn.unwrap()));
+            }
+        } else {
+            // as a fallback, allow squares defended by other pieces
+            let occ = board.occupied();
+            if board.attacks_to(sq, color, occ).any() {
+                count += 1;
+                if example.is_none() {
+                    example = Some((sq, board.piece_at(sq).unwrap().role, Square::E1));
+                    // support square unknown; placeholder E1 (we will prefer pawn support in examples)
+                }
+            }
+        }
+    }
+
+    (count, example)
+}
+
 /// Center control score: presence and attacks on D4, D5, E4, E5 (centipawns).
 fn center_control_score(board: &shakmaty::Board, color: Color) -> i64 {
     let center = [Square::D4, Square::D5, Square::E4, Square::E5];
@@ -1512,7 +1569,7 @@ fn compute_groups(chess: &Chess, phase: u8, legal_move_count: usize) -> EvalGrou
     );
 
     let mut piece_activity = GroupValue::default();
-    let (piece_us, piece_us_terms) = piece_activity_score(
+    let (piece_us, mut piece_us_terms) = piece_activity_score(
         board,
         us,
         phase,
@@ -1543,6 +1600,21 @@ fn compute_groups(chess: &Chess, phase: u8, legal_move_count: usize) -> EvalGrou
         "opp_terms".into(),
         serde_json::Value::Object(piece_them_terms),
     );
+
+    // Outpost detection: add as a piece activity term, with example context
+    let (outposts_us, out_ex_us) = detect_outposts(board, us);
+    let (outposts_them, out_ex_them) = detect_outposts(board, them);
+    let outpost_weight = 40_i64; // GUESS
+    let outpost_delta = outposts_us * outpost_weight - outposts_them * outpost_weight;
+    piece_activity.blended += outpost_delta;
+    piece_activity.terms.insert("outposts_us".into(), serde_json::Value::from(outposts_us));
+    piece_activity.terms.insert("outposts_them".into(), serde_json::Value::from(outposts_them));
+    if let Some((sq, role, support)) = out_ex_us {
+        piece_activity.terms.insert("outpost_example_us".into(), serde_json::Value::from(format!("{} on {} supported by {}", match role { Role::Knight => "N", Role::Bishop => "B", _ => "?" }, sq, piece_square_name(board, support))));
+    }
+    if let Some((sq, role, support)) = out_ex_them {
+        piece_activity.terms.insert("outpost_example_them".into(), serde_json::Value::from(format!("{} on {} supported by {}", match role { Role::Knight => "N", Role::Bishop => "B", _ => "?" }, sq, piece_square_name(board, support))));
+    }
 
     let mut king_safety_group = GroupValue::default();
     let (king_mg, king_eg) = phase_split(king_safety, phase);
@@ -1796,6 +1868,19 @@ pub fn render_explanations(record: &PositionRecord) -> Vec<String> {
         }
     }
 
+    // Outpost explanation
+    if let Some(val) = record.groups.piece_activity.terms.get("outposts_us") {
+        if let Some(n) = val.as_i64() {
+            if n > 0 {
+                if let Some(ex) = record.groups.piece_activity.terms.get("outpost_example_us").and_then(|v| v.as_str()) {
+                    out.push(format!("{} has {} outpost(s) (e.g. {}) — strong squares often requiring specific plans to challenge.", side, n, ex));
+                } else {
+                    out.push(format!("{} has {} outpost(s) — strong squares often requiring specific plans to challenge.", side, n));
+                }
+            }
+        }
+    }
+
     // Development/space/initiative
     if let Some(val) = record.groups.development.terms.get("development_diff") {
         if let Some(n) = val.as_i64() {
@@ -1955,5 +2040,30 @@ mod tests {
             .unwrap_or(0);
         assert!(forks_us >= 1);
     }
+
+    #[test]
+    fn detects_outpost() {
+        // White knight on d5 supported by pawn on c4; no black pawn attacks d5
+        let fen = "k7/8/8/3N4/2P5/8/8/4K3 w - - 0 1";
+        let record = analyze_fen(fen).expect("FEN should parse");
+        let outposts = record
+            .groups
+            .piece_activity
+            .terms
+            .get("outposts_us")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        assert!(outposts >= 1);
+        // example string present
+        let ex = record
+            .groups
+            .piece_activity
+            .terms
+            .get("outpost_example_us")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert!(!ex.is_empty());
+    }
 }
+
 
