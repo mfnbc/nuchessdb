@@ -1788,8 +1788,7 @@ pub fn analyze_fen_with_engine_score(
 
 pub fn render_structured_explanations(record: &PositionRecord) -> Vec<serde_json::Value> {
     let mut out: Vec<serde_json::Value> = Vec::new();
-    let side = if record.side_to_move == "white" { "white" } else { "black" };
-    let side_cap = if side == "white" { "White" } else { "Black" };
+    let side_cap = if record.side_to_move == "white" { "White" } else { "Black" };
 
     // Helper to create an explanation object
     let make_obj = |kind: &str, side_str: &str, severity: i64, phrase: String, details: serde_json::Map<String, serde_json::Value>| -> serde_json::Value {

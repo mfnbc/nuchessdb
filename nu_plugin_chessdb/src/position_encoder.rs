@@ -151,7 +151,7 @@ fn role_index(role: Role) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shakmaty::{fen::Fen, CastlingMode, Chess, Position};
+    use shakmaty::{fen::Fen, CastlingMode, Chess};
 
     fn starting_chess() -> Chess {
         Fen::from_ascii(b"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
