@@ -1,133 +1,117 @@
-PLAN: Additions & Roadmap for Critter Evaluation Enhancements
-
-Location
-- File to add: nuchessdb/nu_plugin_chessdb/PLAN.md
-- Relevant codebase: nuchessdb/nu_plugin_chessdb/src/eval/position.rs (existing HUGM logic, formerly called "critter")
+PLAN: HUGM (Human GM) evaluation — roadmap, status, and schema
 
 Purpose
-- Capture the source rationale for proposed evaluation features, concrete tasks required to implement each one, testing guidance, and the planned (deferred) tuning strategy using an ELO-weighted chess database traversal.
-- This is a design and implementation reference for future contributors; it does not change code now.
-
-Assumptions
-- Keep changes minimal and surgical: add new heuristics and terms without renaming or removing existing groups/fields.
-- All features should remain static, explainable heuristics (no search-based evaluation inside HUGM). Search-based calibration or additional tactical checks may be performed later as a separate pass.
-- Performance: bitboard operations must be used; new computations should keep per-position complexity small (O(squares) or bitboard ops) so batch processing remains fast.
+- Document goals and engineering plan for HUGM (formerly "critter") static evaluation.
+- Provide a compact status update, a structured explanation JSON schema for consumers (nu-agent/LLMs), and a short actionable plan.
 
 High-level goals
-1. Improve human-readable diagnostics (for coaching) by adding motif detectors and more explicit terms (tactical motifs, tropism, rook activity, mobility, outposts).
-2. Produce human-readable evaluation annotations for each notable feature detected. Annotations should be consumable by the coach-review stage and by downstream LLMs — they should include natural-language phrases and (later) concrete references to piece types and board squares (e.g., "Knight on d5 forks Q on f6 and R on b6").
-3. Preserve backwards compatibility of PositionRecord schema (add terms to existing groups or add new groups, but do not remove fields).
-4. Defer heavy tuning. Initial feature weights will be guessed and annotated. Final tuning will be done by traversing a large ELO-graded game corpus (e.g., lichess DB) and updating weights based on game outcomes and the evaluations that contributed to a chosen move.
+- Static, explainable bitboard heuristics (no search inside HUGM).
+- Human-readable annotations (phrases + structured JSON) useful for coaching and LLM consumption.
+- Default analytics-friendly numeric output; verbose mode (--verbose / -v) emits explanations + structured annotations.
+- Centralize guessed weights and provide a runtime override (--weights) for experimentation without recompilation.
 
-Priority feature list (short)
-- A: Tactical motif detectors (pins, forks, skewers, discovered attacks)
-- B: King tropism / attacker strength term
-- C: Rook open-file / 7th / doubled detection
-- D: Piece mobility per piece type + optional PSTs
-- E: Outpost / blockade detection
-- F: Pawn majority / minority and break potential (longer term)
-- G: Endgame-specific overrides & king-activity bonuses
+Status summary (by feature)
+- A: Tactical motifs (pins, forks, skewers, discovered)
+  - Status: DONE. Implemented detect_pins, detect_forks, detect_skewers, detect_discovered. Examples stored in tactical.terms (fork_example_us, skewer_example_us, etc.). Unit tests present.
 
-For each feature: source and rationale
-- Tactical motifs (A)
-  - Source: chessprogramming.org tactical motif pages; common human-understood motifs.
-  - Rationale: High value for coaching and for identifying tactical "culprits" behind quick eval drops.
+- B: King tropism
+  - Status: DONE. king_tropism_score implemented and integrated into king_safety_group.terms.
 
-- King tropism (B)
-  - Source: chessprogramming.org evaluation: tropism and king attack heuristics.
-  - Rationale: Complements king_safety by quantifying attacker proximity and trajectories.
+- C: Rook activity (open files, 7th, doubled)
+  - Status: DONE. Open-file control, rook-on-7th, doubled-rooks detected and included in piece_activity terms.
 
-- Rook activity (C)
-  - Source: evaluation pages: rook on open file, rook on seventh, doubled rooks.
-  - Rationale: Common human plans and easy-to-compute signals useful for coaching.
+- D: Mobility & PST (per-piece mobility counters + PST hook)
+  - Status: PARTIAL. Many per-piece heuristics exist in piece_activity_score but explicit mobility counters and PST arrays/hooks are not yet added.
 
-- Mobility & PST (D)
-  - Source: mobility metrics and piece-square tables on chessprogramming.org.
-  - Rationale: More granular activity signals and a compact PST mechanism for small positional gains.
+- E: Outpost / blockade
+  - Status: DONE (basic). detect_outposts implemented and example context returned; blockades not fully fleshed beyond passed pawn scoring.
 
-- Outpost / blockade (E)
-  - Source: pawn structure evaluation and outpost notions.
-  - Rationale: Explain why certain squares are strategically strong (e.g., knight on outpost).
+- F: Pawn-majority / break potential
+  - Status: NOT IMPLEMENTED. Candidate for next phase.
 
-- Pawn-majority/break potential (F)
-  - Source: advanced pawn structure heuristics.
-  - Rationale: Detect plan opportunities like minority attack; higher implementation complexity and tuning needs.
+- G: Endgame overrides & king-activity bonuses
+  - Status: PARTIAL. win_chance_scale() and draw heuristics exist; explicit small-material overrides or K+P rules not added as a dedicated feature.
 
-- Endgame overrides (G)
-  - Source: endgame heuristics: king activity, opposition, rook vs minor, K+P handling.
-  - Rationale: Improve evaluation accuracy in low-material scenarios.
+Infrastructure & tooling
+- Weights centralization: DONE. GUESS weights collected; Weights struct + WEIGHTS global added. Runtime override via set_weights_from_file(path) and --weights CLI flag.
+- CLI: chessdb hugm-eval: default analytics-only outputs numeric groups (hugm_score, hugm_eval_arr). --verbose / -v adds "explanations" and "explanations_structured" arrays. --weights / -w loads a JSON weights file.
+- Clippy: applied low-risk fixes; clippy-clean and unit tests (15) pass.
 
-Concrete tasks per feature (developer checklist)
-- Tactical motifs (A)
-  1. Design motif detectors: detect_pins(board), detect_skewers(board), detect_forks(board), detect_discovered(board).
-  2. Implement bitboard-based pattern checks in position.rs alongside other helpers.
-  3. Add motif counts and a small weighted mg/eg contribution into an existing group (strategic or new tactical subterms in strategic/group "vector_features").
-  4. Provide example context for detected motifs: return example squares and piece identities that demonstrate the motif (e.g., fork: {attacker: "Nd5", targets: ["Qf6","Rb6"]}). These are for explainability and optional later consumption by coach-review / LLM prompts.
-  5. Unit tests: small FENs demonstrating each motif and asserting presence of new terms and example context.
+Structured explanation JSON (schema & example)
+- Purpose: give a compact, predictable shape that nu-agent and LLM prompts can rely on.
 
-- King tropism (B)
-  1. Implement attacker_distance_sum(board, color) or weighted tropism function.
-  2. Add term to king_safety or vector_features with mg/eg split via phase_split.
-  3. Unit tests with attacking-piece proximity positions.
+Schema (concise)
+- explanations_structured: array of Explanation objects.
+- Explanation object:
+  - kind: string (e.g., "fork", "pin", "skewer", "outpost", "rook_open_files", "none")
+  - side: string ("white" or "black") — whose features are being reported
+  - severity: integer (signed centipawn-like magnitude or simple count)
+  - phrase: short human-readable string summarizing the observation
+  - details: object with motif-specific keys (see examples)
 
-- Rook activity (C)
-  1. Implement open_file_control(board, color) and rook_on_seventh(board, color) checks; detect doubled rooks.
-  2. Add terms into piece_activity (rook_7th, open_file_controlled, doubled_rooks).
-  3. Unit tests with rooks on 7th and open-file positions.
+Example (JSON-like)
+- Single fork explanation example:
+  {
+    "kind": "fork",
+    "side": "white",
+    "severity": 80,
+    "phrase": "White has 1 fork(s) detected (e.g. Nd5 forks Qf6 and Rb6).",
+    "details": {
+      "example": {
+        "attacker": "Nd5",
+        "targets": ["Qf6", "Rb6"]
+      }
+    }
+  }
 
-- Mobility & PST (D)
-  1. Add mobility counters per piece type inside piece_activity_score.
-  2. Optionally add static PST arrays (mg and eg) and accumulate pst_sum term.
-  3. Unit tests verifying mobility and PST terms exist and are numeric.
+- Skewer example:
+  {
+    "kind": "skewer",
+    "side": "white",
+    "severity": 40,
+    "phrase": "White has a skewer (e.g. Rg7: Rf7 -> Qf8).",
+    "details": { "example": { "attacker": "Rg7", "front": "Rf7", "back": "Qf8" } }
+  }
 
-- Outpost / blockade (E)
-  1. Implement detection of outpost squares (defended by pawn, not attackable by opponent pawn) and blockaded passed pawns.
-  2. Add terms to pawn_structure and piece_activity.
-  3. Unit tests for canonical outpost/blockade positions.
+- Outpost example:
+  {
+    "kind": "outpost",
+    "side": "black",
+    "severity": 40,
+    "phrase": "Black has 1 outpost(s) (e.g. Nb4 supported by c5).",
+    "details": { "example": { "square": "b4", "role": "N", "support": "c5" } }
+  }
 
-- Pawn majority / break potential (F)
-  1. Heuristic detection of flank majority and simple break templates (e.g., queenside minority structures).
-  2. Add terms to pawn_structure and strategic.
-  3. Integration tests on sample openings.
+Notes on schema
+- details is intentionally flexible; motif detectors should place a small structured object under details.example for immediate consumption.
+- severity may be a small signed integer (centipawn-ish) or a motif count depending on context. Consumers should treat it as a signed integer representing importance; phrase supplies natural-language text.
 
-- Endgame overrides (G)
-  1. Identify low-material thresholds and implement targeted adjustments (king activity bonus, simplified K+P rules).
-  2. Add tests for relevant endgame FENs.
+Compact actionable plan (short-term next steps)
+1. Add schema snippet to PLAN.md (done here).
+2. Implement --examples N (default 1): return up to N motif examples per motif when verbose. Tests: ensure arrays length ≤ N. (Next-highest priority.)
+3. Add per-piece mobility counters and PST hook in piece_activity_score (D). Expose PST enable via weights or a toggle flag. Add tests.
+4. Expand detectors to return multiple examples (fork_examples_us -> Vec<...>) and update render_structured_explanations accordingly.
+5. Implement pawn-majority/break potential heuristics (F) and add tests/PR.
+6. Add optional persistable weights profiles and an example weights JSON file in repo (eval/weights_example.json). Update README with a short usage snippet.
+7. When features are stable, design and run the corpus-based ELO tuning pipeline (research project).
 
-Testing & validation
-- Unit tests: add test cases to the bottom of position.rs like the existing tests. Each new feature must have at least one test FEN and assertions verifying term existence and reasonable sign.
-- Integration validation: run batch over a small game sample to ensure performance impact is minor (time per position should remain low). Use existing bench timing reported in README as baseline.
+Longer-term ideas (deferred)
+- Attribution model for corpus-driven tuning (term → move influence → game outcome).
+- LLM-driven summary templates and coach-grade suggestions built on structured explanations.
+- PST/NNUE co-training: expose hooks to swap/tune PSTs alongside NNUE models.
 
-Tuning strategy (deferred, planned exercise)
-- Initial weights: will be guessed and annotated directly in code (constants near function definitions). Annotate each constant with a "GUESS" comment.
-- Final tuning idea (major project):
-  1. Traverse a large ELO-sorted lichess/chessdb corpus.
-  2. For each move in a game, record the HUGM evaluation terms for the position before the move and which term(s) changed in the move's delta (the candidate "influencers").
-  3. Attribute game outcome (win/loss/draw) to the move(s) and to the influencing terms (this attribution model must be designed; simplest approach: credit the primary term that changed most in magnitude toward the final outcome).
-  4. Aggregate statistics per-term by ELO buckets and compute reward multipliers (increase weights for terms that historically correlate with better W/L/D outcomes, decrease otherwise).
-  5. Iterate: re-evaluate corpus and refine attribution heuristics (moving averages, smoothing, regularization to avoid overfitting).
-- Note: this is a research exercise: careful design of attribution and ELO binning is necessary. Expect to store intermediate results (term -> influence -> outcome) in a separate analytics DB table and iterate offline.
+How I can help next
+- Implement --examples N and wire detectors to return up to N examples (code + unit tests).
+- Add mobility counters + PST hook and tests.
+- Add example weights file and small README snippet documenting the available keys.
 
-Engineering notes & conventions
-- Keep new constants grouped near the top of position.rs (similar to material coeff table) with descriptive names.
-- Add only additive terms to GroupValue. Avoid renaming existing fields. New groups are acceptable if they are pure additions (e.g., tactical_motifs: GroupValue).
-- Add doc comments for each new helper function and reference chessprogramming pages where appropriate.
-- Keep PRs small and focused: one PR per feature cluster (e.g., PR for tactical motifs + tests, PR for tropism + rook activity, etc.).
+If you want to proceed, pick one from:
+- "--examples N" implementation (recommended next step),
+- mobility & PST (next-high impact),
+- add example weights file + docs (small), or
+- start the corpus/tuning design notes (larger research task).
 
-Milestones / timeline suggestion
-- Week 1: Implement A (tactical motif detectors) + B (tropism) with tests.
-- Week 2: Implement C (rook activity) + D (mobility counters) with tests.
-- Week 3-4: Implement E (outposts) and add initial endgame rules (G).
-- Later: Plan and implement the tuning/training pipeline with corpus traversal.
-
-Notes for future implementer
-- Scores will be guessed initially and labeled as GUESS in code. We will not attempt to tune weights until we run the corpus exercise described above.
-- The tuning exercise is a major effort (data engineering + careful attribution logic). We intentionally separate feature engineering from tuning to keep progress iterative and reviewable.
-- Human-readable annotations: the long-term goal is that each detector returns both numeric terms and structured explanation context (small JSON objects with piece-square references and severity). These structured annotations will be used to generate short human-readable templates (the render_explanations function) and to feed LLM prompts so the model can "see the board" in plain language. For now, implement detectors to optionally return example squares/pieces when easy; full square-naming coverage may be deferred to a follow-up but should be tracked as a requirement in PRs.
-
-References
-- chessprogramming.org/Evaluation — canonical list of human-understood evaluation concepts used here as source material.
-- Existing codebase file: nuchessdb/nu_plugin_chessdb/src/eval/position.rs
 
 Contact
-- If you want me to implement a first PR (tactical detectors + tropism + tests) I can draft the code and tests next.
+- File location: nuchessdb/nu_plugin_chessdb/src/eval/position.rs (core); hugm eval entry: nuchessdb/nu_plugin_chessdb/src/hugm_eval_cmd.rs
+- Repo branch: hugm
