@@ -144,6 +144,13 @@ Phase D — Algorithmic weight tuning (deferred research)
 - Use aggregated statistics to propose weight updates (regularized optimization, grid/hillclimb, or regression) with holdout validation to prevent overfitting.
 - Iterate until improvements generalize across ELO buckets.
 
+Policy: Stockfish evaluation handling
+- Do NOT persist Stockfish numeric evaluations as canonical fields in the positions table by default. Stockfish is a computational oracle used for two purposes: (1) on‑demand review and (2) ephemeral labeling for training. Persisting engine scores in the primary analytics DB biases the canonical dataset toward machine judgments and reduces the pedagogical, human‑interpretable clarity of HUGM outputs.
+- Operational rules:
+  - On‑demand review: provide a `review` path that runs Stockfish live and returns an ephemeral evaluation to the user; do not store those numbers automatically.
+  - Labeling for training: when Stockfish labels are required, generate them in a separate labeling pipeline and store them only in training shards/manifest (NPZ/JSON) with full provenance (engine version, parameters, date).
+  - Auditability: record the labeling run metadata in the dataset manifest; do not bake engine outputs into the main positions table unless explicitly requested.
+
 Operational notes
 - Default pipeline: continue to emit only scalars (hugm_score/hugm_eval_arr) for corpus ingestion.
 - Verbose-only: structured examples are emitted only when --verbose is passed; these are not stored by default to avoid DB bloat.
@@ -180,5 +187,58 @@ Resuming work later (checkpointing)
 Sidequest note
 - You mentioned a sidequest — note it here as an explicit, resumable ticket: "SIDEQUEST: <brief description>". When you provide the sidequest details I'll add it to PLAN.md as a tracked task and can switch focus, run it, and then return to the main validation/tuning pipeline. This keeps context intact when stepping away.
 
-Next immediate step
-- I will continue curating more canonical examples if you confirm how many additional examples per motif you want in this pass (recommended: +3–5 per motif). Alternatively I can start the evaluation harness so you can feed labeled JSONL. Which do you prefer?
+Resumption checkpoint (2026-05-15)
+- Core files to review when returning:
+  - `src/eval/position.rs` — chaos_coefficient, tiered compute_aggregates, full sensor extractors
+  - `src/eval/concepts.rs` — SensorTier enum, tier_for_concept, attenuation matrix
+  - `src/eval/sensor.rs` — AggregatedScores.chaos field
+  - `src/process_corpus.rs` — state_id in positions output
+  - `nuchessdb.nu` — coach-review, derive-coach, import-records with move_states
+  - `nu-agent/engine.nu` — CLI main entry point, rag embed fix
+  - `nu-agent/config.toml` — model: qwen/qwen3.6-35b-a3b (structured output)
+
+Completed features:
+- ✅ SensorReport fully populated (all positional extractors: doubled, isolated, pawn_islands, etc.)
+- ✅ MaterialConceptReport with balance from groups
+- ✅ state_id in positions table + migrate_states population during ingest
+- ✅ coach-review command (anomaly-first, eval-drop fallback, LLM enrichment)
+- ✅ derive-coach command (Welford baselines, z-score anomalies, state transitions)
+- ✅ Elo Sensor Taxonomy: SensorTier enum, tier_for_concept, attenuation matrix
+- ✅ Convergence Gate: chaos_coefficient from tactical sensors, tiered attenuation in compute_aggregates
+- ✅ Idempotent sync merge (INSERT OR IGNORE via sqlite3)
+- ✅ Nushell 0.111 compat fixes (string interpolation, path self)
+
+Architecture notes:
+- The convergence gate solves the digital-switch vs analog-dial problem: survival/threat sensors
+  always active, positional sensors dampened at 50% of chaos, strategic sensors fully suppressed.
+  chaos_coefficient reads forks+pins+skewers+hanging+in_check+king_exposed from sensor terms.
+- The coach pipeline now says "this was unusual *for you*" via per-player z-score baselines.
+- Qwen model produces richer Socratic coaching than Gemma; slower but more specific.
+
+Next session:
+- Per-concept baselines (extend derive-coach-signals beyond single hugm_delta)
+- Attentional profile in coach input (accuracy tracking per concept)
+- Anomaly type classification: attention_slip vs skill_deficit vs developmental
+- Socratic refinement: less leading questions, more holistic position awareness
+
+---
+Known Bugs (last reviewed 2026-05-13)
+
+RESOLVED:
+- BUG-1: FIXED — added `board_pieces TEXT` to positions DDL + included in import-records SELECT
+- BUG-2: ALREADY FIXED — query uses `m.game_id = g.game_id` correctly
+- BUG-3: ALREADY FIXED — played_at extraction from end_time/lastMoveAt/createdAt exists
+- BUG-5: RESOLVED — `--with-stockfish` flag removed entirely; Stockfish labeling is a separate pipeline
+- BUG-7: FIXED — critter_eval_cmd.rs deleted; use `chessdb hugm-eval` instead
+- BUG-8: ALREADY FIXED — help text uses "nuchessdb.nu"
+
+OPEN (non-blocking):
+- BUG-4: process_corpus HUGM eval is sequential, not parallel (performance, not correctness)
+- BUG-6: Stockfish binary path inconsistency in sf_batch_eval (separate bin, not in core pipeline)
+
+CLEANUP (2026-05-13):
+- Removed nnue_eval_cmd.rs (dead file, was just a comment)
+- Removed critter_eval_cmd.rs (undifferentiated alias for hugm-eval, BUG-7)
+- Removed src/bin/nnue_dataset_builder.rs (duplicate of dataset_builder_cmd plugin)
+- Removed --with-stockfish flag from process_corpus (dead, BUG-5)
+- Cleaned unused imports in process_corpus.rs and dataset_builder_cmd.rs

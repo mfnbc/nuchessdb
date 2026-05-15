@@ -56,15 +56,17 @@ nu nuchessdb.nu coach-review 1
 ## How it Works
 
 - **`nu_plugin_chessdb`**: Rust plugin for all chess semantics (FEN, hashing, NNUE, HUGM eval).
-  - **Batch Processing**: Plugin accepts lists of FENs for efficient parallel processing
-  - **Zobrist hashing**: Process thousands of positions in a single call
-  - **HUGM evaluation**: Uses Rayon for multi-core parallel analysis
-- **Modules**: Nushell orchestration for sync, reporting, and RAG integration.
-  - **List-first design**: All operations work with full lists, not individual items
-  - **Smart caching**: Skip evaluation of positions that already exist
-- **Coach's Notebook**:
-    - **Strategic (Static)**: Structural vector similarity finds similar historical/opening positions.
-    - **Tactical (Dynamic)**: Identifies the "Culprit" behind eval drops (e.g., King Safety vs Material).
+  - **Elo Sensor Taxonomy**: Sensors classified into four tiers (Survival/Threat/Positional/Strategic) by ELO threshold.
+  - **Convergence Gate**: Chaos coefficient gates higher-tier sensors — positional analysis is attenuated in tactically unstable positions.
+  - **Batch Processing**: Plugin accepts lists of FENs for efficient parallel processing.
+  - **HUGM evaluation**: Uses Rayon for multi-core parallel analysis.
+- **Modules**: Nushell orchestration for sync, reporting, and LLM integration.
+  - **List-first design**: All operations work with full lists, not individual items.
+  - **Idempotent sync**: Re-imports skip already-evaluated positions and games.
+- **Cognitive Coach**:
+    - **Per-player baselines**: Welford's algorithm computes mean/std for eval swings across a player's history.
+    - **Anomaly detection**: z-score flags moves that are statistically unusual *for this player*.
+    - **Socratic enrichment**: Typed concepts fed through nu-agent's Enrich contract to an LLM (Gemma/Qwen).
 
 ## Performance
 
@@ -78,62 +80,60 @@ The pipeline is optimized for batch processing:
 
 All commands are run via: `nu nuchessdb.nu <command> [args]`
 
-| Command | Description |
-|---|---|
-| `init` | Initialize database and schema |
-| `sync <platform> <username>` | Download and import games from chess.com/lichess |
-| `import <path.pgn> <platform>` | Import PGN file into database |
-| `status` | Database overview (games, positions, evaluations) |
-| `report [limit]` | Performance stats for most-visited positions |
-| `hugm-eval [limit]` | Run decomposed structural evaluation queue |
-| `eco-classify [limit]` | Top positions with ECO opening names |
-| `coach-review <game_id>` | Generate AI-driven game annotations |
-| `recent [limit]` | Show recently imported games |
-| `top [limit]` | Most-visited positions |
+| Command | Description | Status |
+|---|---|---|
+| `init` | Initialize database and schema | ✅ |
+| `sync <username>` | Download and import games from chess.com | ✅ |
+| `recent [n]` | List the n most recent games (default 5) | ✅ |
+| `explore <zobrist>` | Show move frequencies and ELO performance for a position | ✅ |
+| `review <game_id>` | Show move-by-move HUGM evaluations for a game | ✅ |
+| `status` | Database counts (games, positions, moves) | ✅ |
+| `coach-review <game_id> [perspective]` | LLM-powered Socratic coaching with anomaly detection | ✅ |
+| `derive-coach <username>` | Compute per-player baselines and anomaly alerts | ✅ |
+| `import <path.pgn>` | Import PGN file into database | 🚧 planned |
 
 Run `nu nuchessdb.nu help` for complete usage information.
 
+## Plugin Commands
+
+The `nu_plugin_chessdb` Rust plugin exposes these commands directly in Nushell:
+
+| Command | Description | Status |
+|---------|-------------|--------|
+| `chessdb hugm-eval` | HUGM decomposed evaluation (FEN → scored concepts) | ✅ |
+| `chessdb nnue-eval` | Stockfish NNUE evaluation (FEN → centipawn score) | ✅ |
+| `chessdb process-corpus` | Parse game JSON arrays into structured records | ✅ |
+| `chessdb pgn-to-fens` | Parse single-game PGN to move + FEN records | ✅ |
+| `chessdb pgn-to-batch` | Parse multi-game PGN to batch records | ✅ |
+| `chessdb bullet-build` | Build bullet-format training shards | 🚧 |
+| `chessdb pgn-scan` | Scan PGN text for game count, validation | ✅ |
+| `chessdb zobrist` | Compute zobrist hash from FEN | ✅ |
+
+### Plugin output contract (stable)
+
+`chessdb hugm-eval` returns per FEN:
+```
+{ fen, final_score, phase, side_to_move, groups: {...}, sensor_report: {...} }
+```
+
+The `sensor_report` contains typed concepts (forks, pins, outposts, etc.) ready for the LLM coach contract at `prj/nu-agent/contracts/chess_coach.toml`. Concept extraction is a separate read-only pass after evaluation — ingestion remains deterministic and fast.
+
 ## Advanced Querying
 
-The database is just SQLite - you can query it directly in Nushell:
+The database is SQLite — query it directly in Nushell:
 
 ```nu
-let db = (open ./data/nuchessdb.sqlite)
+let db = (open chess.db)
 
-# Win rate by color
+# Win rate by color from game results
 $db | query db "
   SELECT 
-    CASE WHEN g.white_account_id = m.id THEN 'white' ELSE 'black' END AS color,
-    COUNT(*) AS games,
-    ROUND(100.0 * SUM(CASE 
-      WHEN (g.white_account_id = m.id AND g.result = '1-0') 
-        OR (g.black_account_id = m.id AND g.result = '0-1') 
-      THEN 1 ELSE 0 
-    END) / COUNT(*), 1) AS win_pct
-  FROM games g 
-  JOIN accounts m ON m.is_me = 1 
-    AND (g.white_account_id = m.id OR g.black_account_id = m.id)
-  GROUP BY color
+    CASE WHEN g.white = (SELECT white FROM games LIMIT 1) THEN 'white' ELSE 'black' END,
+    COUNT(*) as games,
+    COUNT(CASE WHEN result = '1-0' THEN 1 END) as wins
+  FROM games g GROUP BY 1
 "
 ```
-
-Refer to `docs/query-primer.md` for more examples.
-
-## Advanced Module Usage
-
-For scripting or custom workflows, import modules directly:
-
-```nu
-use modules/db.nu *
-use modules/import.nu *
-use modules/hugm.nu *
-
-init-db
-import-pgn-file ./data/games.pgn chesscom
-hugm-eval-queue 50
-```
-
-**Note:** The `--with-hugm` flag has been removed. HUGM evaluation is now always enabled by default.
 
 ## Architecture
 

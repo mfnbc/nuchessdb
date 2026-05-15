@@ -1,201 +1,13 @@
-/// `chessdb nnue-eval` — evaluate a FEN using a chess-vector-engine NNUE weight file.
-///
-/// The weight file is a JSON array of tuples: `Vec<(String, Vec<usize>, Vec<f32>)>`.
-/// Each tuple is `(layer_name, shape, flat_data)`.
-///
-/// Architecture (default config):
-///   input (768 piece-position features)
-///   → feature_transformer (768 → hidden_size) + bias → ClippedReLU
-///   → N hidden layers (hidden_size → hidden_size) + bias → ClippedReLU
-///   → output layer (hidden_size → 1) + bias
-///   → multiply by 600.0 to get centipawns
-///
-/// This is a hand-rolled forward pass with no external ML dependencies.
-use anyhow::{Context, Result};
-use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
-use nu_protocol::{Category, LabeledError, PipelineData, Signature, SyntaxShape, Type, Value};
-use serde::Deserialize;
-use std::collections::HashMap;
+use std::io::{BufRead, BufReader, Write};
+use std::process::{Command, Stdio};
 
-use crate::position_encoder::encode_position;
+use nu_plugin::{EvaluatedCall, PluginCommand};
+use nu_protocol::{Category, LabeledError, PipelineData, Signature, Type, Value};
+
 use crate::ChessdbPlugin;
-use shakmaty::{fen::Fen, CastlingMode, Chess};
+use crate::PLUGIN_CATEGORY;
 
 pub struct NnueEval;
-
-#[derive(Debug, Deserialize)]
-struct NnueConfig {
-    pub feature_size: usize,
-    pub hidden_size: usize,
-    pub num_hidden_layers: usize,
-    pub activation: String,
-    // remaining fields are not needed for inference
-}
-
-impl Default for NnueConfig {
-    fn default() -> Self {
-        Self {
-            feature_size: 768,
-            hidden_size: 256,
-            num_hidden_layers: 2,
-            activation: "ClippedReLU".to_string(),
-        }
-    }
-}
-
-/// A layer with weight matrix (out × in) and bias vector (out).
-struct Layer {
-    weight: Vec<f32>, // row-major, shape [out_size × in_size]
-    bias: Vec<f32>,   // shape [out_size]
-    out_size: usize,
-    in_size: usize,
-}
-
-impl Layer {
-    fn forward(&self, input: &[f32]) -> Vec<f32> {
-        assert_eq!(input.len(), self.in_size, "layer input size mismatch");
-        let mut output = vec![0.0f32; self.out_size];
-        // Weight stored as [in_size × out_size] (column-major from PyTorch/candle convention).
-        // output[j] = bias[j] + sum_i(input[i] * weight[i * out_size + j])
-        for (i, &xi) in input.iter().enumerate().take(self.in_size) {
-            if xi == 0.0 {
-                continue;
-            }
-            for (j, out_j) in output.iter_mut().enumerate().take(self.out_size) {
-                *out_j += xi * self.weight[i * self.out_size + j];
-            }
-        }
-        for (j, b) in self.bias.iter().enumerate().take(self.out_size) {
-            output[j] += *b;
-        }
-        output
-    }
-}
-
-fn clipped_relu(v: &[f32]) -> Vec<f32> {
-    v.iter().map(|&x| x.clamp(0.0, 1.0)).collect()
-}
-
-fn apply_activation(v: &[f32], activation: &str) -> Vec<f32> {
-    match activation {
-        "ClippedReLU" | "clipped_relu" => clipped_relu(v),
-        "ReLU" | "relu" => v.iter().map(|&x| x.max(0.0)).collect(),
-        _ => clipped_relu(v), // default to ClippedReLU
-    }
-}
-
-/// Load weight map from the JSON file.
-/// Format: `[[name, [dim0, dim1, ...], [f0, f1, ...]], ...]`
-type WeightMap = HashMap<String, (Vec<usize>, Vec<f32>)>;
-
-fn load_weights(path: &str) -> Result<WeightMap> {
-    let content = std::fs::read_to_string(path).context("reading weights file")?;
-    let raw: Vec<(String, Vec<usize>, Vec<f32>)> =
-        serde_json::from_str(&content).context("parsing weights JSON")?;
-    let mut map = HashMap::new();
-    for (name, shape, data) in raw {
-        map.insert(name, (shape, data));
-    }
-    Ok(map)
-}
-
-/// Load optional config file (same base name, .config extension).
-fn load_config(weights_path: &str) -> NnueConfig {
-    let config_path = if weights_path.ends_with(".weights") {
-        weights_path.replace(".weights", ".config")
-    } else {
-        format!("{}.config", weights_path)
-    };
-    std::fs::read_to_string(&config_path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
-}
-
-fn run_nnue(fen: &str, weights_path: &str) -> Result<serde_json::Value> {
-    // Parse FEN
-    let parsed = Fen::from_ascii(fen.as_bytes()).context("invalid FEN")?;
-    let chess: Chess = parsed
-        .into_position(CastlingMode::Standard)
-        .context("FEN to position")?;
-
-    // Encode position (1024-element vector; we use first 768)
-    let features_full = encode_position(&chess);
-    let config = load_config(weights_path);
-    let input_size = config.feature_size.min(features_full.len());
-    let input = &features_full[..input_size];
-
-    // Load weights
-    let weights = load_weights(weights_path)?;
-
-    let get_layer = |name_w: &str, name_b: &str, in_size: usize| -> Result<Layer> {
-        let (_shape_w, data_w) = weights
-            .get(name_w)
-            .with_context(|| format!("missing layer {}", name_w))?;
-        let (_shape_b, data_b) = weights
-            .get(name_b)
-            .with_context(|| format!("missing layer {}", name_b))?;
-        // Derive out_size from data length and known in_size.
-        // All weight tensors are stored as flat [in_size × out_size] data.
-        anyhow::ensure!(
-            in_size > 0 && data_w.len() % in_size == 0,
-            "weight data length {} not divisible by in_size {} for {}",
-            data_w.len(),
-            in_size,
-            name_w
-        );
-        let out_size = data_w.len() / in_size;
-        anyhow::ensure!(
-            data_b.len() == out_size,
-            "bias size mismatch for {}: expected {} got {}",
-            name_b,
-            out_size,
-            data_b.len()
-        );
-        Ok(Layer {
-            weight: data_w.clone(),
-            bias: data_b.clone(),
-            out_size,
-            in_size,
-        })
-    };
-
-    // Feature transformer: input_size → hidden_size
-    let ft = get_layer(
-        "feature_transformer.weights",
-        "feature_transformer.biases",
-        input_size,
-    )?;
-    let mut hidden = apply_activation(&ft.forward(input), &config.activation);
-
-    // Hidden layers
-    for i in 0..config.num_hidden_layers {
-        let w_name = format!("hidden_layer_{}.weight", i);
-        let b_name = format!("hidden_layer_{}.bias", i);
-        if weights.contains_key(&w_name) {
-            let layer = get_layer(&w_name, &b_name, hidden.len())?;
-            hidden = apply_activation(&layer.forward(&hidden), &config.activation);
-        }
-    }
-
-    // Output layer
-    let out_layer = get_layer("output_layer.weight", "output_layer.bias", hidden.len())?;
-    let raw_output = out_layer.forward(&hidden);
-    let score_raw = raw_output[0];
-    let score_cp = (score_raw * 600.0) as i64;
-
-    Ok(serde_json::json!({
-        "score_cp": score_cp,
-        "score_pawns": score_raw * 6.0,
-        "weights_path": weights_path,
-        "config": {
-            "feature_size": config.feature_size,
-            "hidden_size": config.hidden_size,
-            "num_hidden_layers": config.num_hidden_layers,
-            "activation": config.activation,
-        }
-    }))
-}
 
 impl PluginCommand for NnueEval {
     type Plugin = ChessdbPlugin;
@@ -205,49 +17,144 @@ impl PluginCommand for NnueEval {
     }
 
     fn description(&self) -> &str {
-        "Evaluate a FEN position using a chess-vector-engine NNUE weight file"
+        "Evaluate chess positions using Stockfish NNUE. Accepts a FEN string or list of FEN strings."
     }
 
     fn signature(&self) -> Signature {
         Signature::build(self.name())
-            .input_output_types(vec![(Type::String, Type::record())])
-            .required_named(
-                "weights",
-                SyntaxShape::String,
-                "path to the .weights file (JSON format from chess-vector-engine)",
-                Some('w'),
-            )
-            .category(Category::Custom(crate::PLUGIN_CATEGORY.into()))
+            .input_output_types(vec![
+                (Type::String, Type::Record(vec![].into())),
+                (
+                    Type::List(Box::new(Type::String)),
+                    Type::List(Box::new(Type::Record(vec![].into()))),
+                ),
+            ])
+            .category(Category::Custom(PLUGIN_CATEGORY.into()))
     }
 
     fn run(
         &self,
-        _plugin: &ChessdbPlugin,
-        _engine: &EngineInterface,
+        _plugin: &Self::Plugin,
+        _engine: &nu_plugin::EngineInterface,
         call: &EvaluatedCall,
         input: PipelineData,
-    ) -> std::result::Result<PipelineData, LabeledError> {
-        let weights_path: String = call
-            .get_flag("weights")
-            .map_err(|e| LabeledError::new(e.to_string()))?
-            .ok_or_else(|| LabeledError::new("--weights is required"))?;
+    ) -> Result<PipelineData, LabeledError> {
+        let span = call.head;
+        let input_value = input.into_value(span)?;
 
-        let fen = match input {
-            PipelineData::Value(Value::String { val, .. }, _) => val,
-            PipelineData::Value(v, _) => v
-                .coerce_string()
-                .map_err(|e| LabeledError::new(format!("expected string input (FEN): {}", e)))?,
+        let fens: Vec<String> = match input_value {
+            Value::String { val, .. } => vec![val],
+            Value::List { vals, .. } => vals
+                .iter()
+                .filter_map(|v| v.as_str().ok().map(|s| s.to_string()))
+                .collect(),
             _ => {
-                return Err(LabeledError::new("expected FEN string as pipeline input"));
+                return Err(LabeledError::new("Expected a FEN string or list of FEN strings")
+                    .with_label("invalid input type", span))
             }
         };
 
-        let result = run_nnue(fen.trim(), &weights_path)
-            .map_err(|e| LabeledError::new(format!("nnue-eval error: {}", e)))?;
+        if fens.is_empty() {
+            return Ok(PipelineData::Value(Value::list(vec![], span), None));
+        }
 
-        // Convert serde_json::Value to nu Value
-        let span = call.head;
-        let nu_val = crate::utils::json_to_nu_value(result, span);
-        Ok(PipelineData::Value(nu_val, None))
+        let stockfish_bin =
+            std::env::var("STOCKFISH_BIN").unwrap_or_else(|_| "/usr/sbin/stockfish".to_string());
+
+        let mut child = Command::new(&stockfish_bin)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| {
+                LabeledError::new(format!(
+                    "cannot spawn Stockfish ({}): {}",
+                    stockfish_bin, e
+                ))
+            })?;
+
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| LabeledError::new("no stdin for stockfish"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| LabeledError::new("no stdout for stockfish"))?;
+        let mut reader = BufReader::new(stdout);
+
+        // UCI init
+        writeln!(stdin, "uci").map_err(|e| LabeledError::new(format!("write error: {e}")))?;
+        stdin.flush().map_err(|e| LabeledError::new(format!("flush error: {e}")))?;
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).map_err(|e| LabeledError::new(format!("read error: {e}")))?;
+            if line.trim() == "uciok" { break; }
+        }
+
+        // Enable NNUE
+        writeln!(stdin, "setoption name Use NNUE value true").map_err(|e| LabeledError::new(format!("write error: {e}")))?;
+        writeln!(stdin, "isready").map_err(|e| LabeledError::new(format!("write error: {e}")))?;
+        stdin.flush().map_err(|e| LabeledError::new(format!("flush error: {e}")))?;
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).map_err(|e| LabeledError::new(format!("read error: {e}")))?;
+            if line.trim() == "readyok" { break; }
+        }
+
+        let mut results: Vec<Value> = Vec::with_capacity(fens.len());
+
+        for fen in &fens {
+            let fen_clean = fen.trim();
+            writeln!(stdin, "position fen {fen_clean}").map_err(|e| LabeledError::new(format!("write error: {e}")))?;
+            writeln!(stdin, "eval").map_err(|e| LabeledError::new(format!("write error: {e}")))?;
+            stdin.flush().map_err(|e| LabeledError::new(format!("flush error: {e}")))?;
+
+            let mut score_cp: Option<i64> = None;
+            let mut lines_read = 0usize;
+            loop {
+                if lines_read >= 100 {
+                    eprintln!("Warning: no Final eval for FEN after 100 lines (fen={}...)", &fen_clean[..fen_clean.len().min(40)]);
+                    break;
+                }
+                let mut line = String::new();
+                reader.read_line(&mut line).map_err(|e| LabeledError::new(format!("read error: {e}")))?;
+                lines_read += 1;
+                if line.starts_with("Final evaluation") {
+                    score_cp = parse_eval_line(&line);
+                    break;
+                }
+            }
+
+            let score = score_cp.unwrap_or(0);
+            let record = nu_protocol::record! {
+                "fen" => Value::string(fen, span),
+                "nnue_score" => Value::int(score, span),
+            };
+            results.push(Value::record(record, span));
+        }
+
+        let _ = writeln!(stdin, "quit");
+        let _ = child.wait();
+
+        if results.len() == 1 {
+            Ok(PipelineData::Value(results.remove(0), None))
+        } else {
+            Ok(PipelineData::Value(Value::list(results, span), None))
+        }
+    }
+}
+
+fn parse_eval_line(line: &str) -> Option<i64> {
+    let after = line.split("Final evaluation").nth(1)?;
+    // after: "       +6.60 (white side) [with scaled NNUE, ...]"
+    let value_str = after.trim().split_whitespace().next()?;
+    match value_str {
+        "none" => None,
+        s if s.starts_with('+') || s.starts_with('-') => {
+            let f: f64 = s.parse().ok()?;
+            Some((f * 100.0).round() as i64)
+        }
+        _ => None,
     }
 }

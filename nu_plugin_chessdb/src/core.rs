@@ -660,7 +660,9 @@ pub fn pgn_to_batch_record(pgn_str: &str, span: Span) -> Result<BatchSummary, La
         };
 
         if let Some(err) = visitor.error {
-            return Err(LabeledError::new(err).with_label("error during move replay", span));
+            eprintln!("Skipping game {game_index}: {err}");
+            game_index += 1;
+            continue;
         }
 
         for row in &game_rows {

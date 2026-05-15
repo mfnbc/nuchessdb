@@ -42,6 +42,12 @@ impl PluginCommand for HugmEval {
                 "Optional JSON file with tunable weights to override defaults",
                 Some('w'),
             )
+            .named(
+                "player-elo",
+                SyntaxShape::Int,
+                "Player ELO for concept gating and Socratic issue ranking",
+                Some('p'),
+            )
             .category(Category::Custom(crate::PLUGIN_CATEGORY.into()))
     }
 
@@ -56,6 +62,7 @@ impl PluginCommand for HugmEval {
         let engine_score: Option<i64> = call.get_flag("engine-score")?;
         let verbose_flag: Option<bool> = call.get_flag("verbose")?;
         let include_verbose = verbose_flag.unwrap_or(false);
+        let player_elo: Option<i32> = call.get_flag("player-elo")?;
         let weights_file: Option<String> = call.get_flag("weights")?;
         if let Some(ref path) = weights_file {
             crate::eval::set_weights_from_file(path).map_err(|e| LabeledError::new(e).with_label("weights load error", span))?;
@@ -78,6 +85,14 @@ impl PluginCommand for HugmEval {
                         map.insert("explanations".to_string(), serde_json::Value::Array(expl.into_iter().map(serde_json::Value::String).collect()));
                         let structured = crate::eval::render_structured_explanations(&record);
                         map.insert("explanations_structured".to_string(), serde_json::Value::Array(structured));
+                    }
+                }
+
+                if let Some(elo) = player_elo {
+                    let concepts = crate::eval::concepts::extract_concepts(&record.groups, &record.side_to_move);
+                    let issues = crate::eval::concepts::rank_issues_for_position(&concepts, elo);
+                    if let serde_json::Value::Object(ref mut map) = json_val {
+                        map.insert("gated_issues".to_string(), serde_json::to_value(&issues).unwrap_or_default());
                     }
                 }
 
@@ -111,6 +126,13 @@ impl PluginCommand for HugmEval {
                                         map.insert("explanations".to_string(), serde_json::Value::Array(expl.into_iter().map(serde_json::Value::String).collect()));
                                         let structured = crate::eval::render_structured_explanations(&record);
                                         map.insert("explanations_structured".to_string(), serde_json::Value::Array(structured));
+                                    }
+                                }
+                                if let Some(elo) = player_elo {
+                                    let concepts = crate::eval::concepts::extract_concepts(&record.groups, &record.side_to_move);
+                                    let issues = crate::eval::concepts::rank_issues_for_position(&concepts, elo);
+                                    if let serde_json::Value::Object(ref mut map) = json_val {
+                                        map.insert("gated_issues".to_string(), serde_json::to_value(&issues).unwrap_or_default());
                                     }
                                 }
                                 Ok(crate::utils::json_to_nu_value(json_val, span))

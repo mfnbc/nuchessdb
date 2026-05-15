@@ -2,6 +2,9 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use shakmaty::{attacks, fen::Fen, Bitboard, Chess, Color, File, Position, Rank, Role, Square};
 
+use crate::eval::concept_types::*;
+use crate::eval::sensor::{TacticalReport, PositionalReport, SensorReport, AggregatedScores, MaterialConceptReport};
+
 // Configurable constants (GUESS values) collected here for easier tuning.
 const TACTICAL_BASE_PINS: i64 = 50;
 const TACTICAL_BASE_FORKS: i64 = 80;
@@ -66,6 +69,14 @@ pub struct Weights {
     pub pawn_break_weight: i64,
     pub minority_attack_weight: i64,
     pub piece_mobility_weight: i64,
+    pub phase_bias_material: i64,
+    pub phase_bias_pawn_structure: i64,
+    pub phase_bias_piece_activity: i64,
+    pub phase_bias_king_safety: i64,
+    pub phase_bias_passed_pawns: i64,
+    pub phase_bias_development: i64,
+    pub phase_bias_vector_features: i64,
+    pub phase_bias_strategic: i64,
 }
 
 impl Default for Weights {
@@ -94,6 +105,14 @@ impl Default for Weights {
             pawn_break_weight: PAWN_BREAK_WEIGHT,
             minority_attack_weight: MINORITY_ATTACK_WEIGHT,
             piece_mobility_weight: PIECE_MOBILITY_WEIGHT,
+            phase_bias_material: 0,
+            phase_bias_pawn_structure: 0,
+            phase_bias_piece_activity: 0,
+            phase_bias_king_safety: 0,
+            phase_bias_passed_pawns: 0,
+            phase_bias_development: 0,
+            phase_bias_vector_features: 0,
+            phase_bias_strategic: 0,
         }
     }
 }
@@ -123,6 +142,14 @@ struct PartialWeights {
     pawn_break_weight: Option<i64>,
     minority_attack_weight: Option<i64>,
     piece_mobility_weight: Option<i64>,
+    phase_bias_material: Option<i64>,
+    phase_bias_pawn_structure: Option<i64>,
+    phase_bias_piece_activity: Option<i64>,
+    phase_bias_king_safety: Option<i64>,
+    phase_bias_passed_pawns: Option<i64>,
+    phase_bias_development: Option<i64>,
+    phase_bias_vector_features: Option<i64>,
+    phase_bias_strategic: Option<i64>,
 }
 
 static WEIGHTS: Lazy<RwLock<Weights>> = Lazy::new(|| RwLock::new(Weights::default()));
@@ -159,6 +186,14 @@ pub fn set_weights_from_file(path: &str) -> Result<(), String> {
     if let Some(v) = p.pawn_break_weight { w.pawn_break_weight = v }
     if let Some(v) = p.minority_attack_weight { w.minority_attack_weight = v }
     if let Some(v) = p.piece_mobility_weight { w.piece_mobility_weight = v }
+    if let Some(v) = p.phase_bias_material { w.phase_bias_material = v }
+    if let Some(v) = p.phase_bias_pawn_structure { w.phase_bias_pawn_structure = v }
+    if let Some(v) = p.phase_bias_piece_activity { w.phase_bias_piece_activity = v }
+    if let Some(v) = p.phase_bias_king_safety { w.phase_bias_king_safety = v }
+    if let Some(v) = p.phase_bias_passed_pawns { w.phase_bias_passed_pawns = v }
+    if let Some(v) = p.phase_bias_development { w.phase_bias_development = v }
+    if let Some(v) = p.phase_bias_vector_features { w.phase_bias_vector_features = v }
+    if let Some(v) = p.phase_bias_strategic { w.phase_bias_strategic = v }
     Ok(())
 }
 
@@ -173,6 +208,7 @@ pub struct PositionRecord {
     pub legal: LegalInfo,
     pub groups: EvalGroups,
     pub checks: Checks,
+    pub sensor_report: SensorReport,
 }
 
 #[derive(Debug, Serialize)]
@@ -213,6 +249,9 @@ pub struct EvalGroups {
     pub scaling: ScalarValue,
     pub drawishness: ScalarValue,
     pub override_: ScalarValue,
+    pub material_total: ScalarValue,
+    pub positional_total: ScalarValue,
+    pub tactical_total: ScalarValue,
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -230,9 +269,22 @@ fn bitboard_count(bb: Bitboard) -> i64 {
     bb.count() as i64
 }
 
+fn biased_phase(phase: u8, bias: i64) -> u8 {
+    ((phase as i64 + bias).clamp(0, 32)) as u8
+}
+
 fn phase_split(value: i64, phase: u8) -> (i64, i64) {
     let bias = (i64::from(phase).saturating_sub(16).abs() * value.abs()) / 64;
     (value + bias, value - bias)
+}
+
+/// Centralized phase blending: Critter's scale() function.
+///   blended = (mg * phase + eg * (32 - phase)) / 32
+/// At phase 32 (opening): blended ≈ mg (positional)
+/// At phase 0  (endgame): blended ≈ eg (material)
+fn blend(mg: i64, eg: i64, phase: u8) -> i64 {
+    let p = phase as i64;
+    (mg * p + eg * (32 - p)) / 32
 }
 
 fn count_on_home(board: &shakmaty::Board, color: Color, role: Role, home: Bitboard) -> i64 {
@@ -255,7 +307,7 @@ fn pawn_attack_mask(board: &shakmaty::Board, color: Color) -> Bitboard {
     atk
 }
 
-fn compute_phase(board: &shakmaty::Board) -> u8 {
+pub fn compute_phase(board: &shakmaty::Board) -> u8 {
     let white_minor = piece_count(board, Color::White, Role::Knight)
         + piece_count(board, Color::White, Role::Bishop);
     let black_minor = piece_count(board, Color::Black, Role::Knight)
@@ -268,14 +320,14 @@ fn compute_phase(board: &shakmaty::Board) -> u8 {
 }
 
 fn material_score(board: &shakmaty::Board, phase: u8) -> GroupValue {
-    let stage = i64::from(phase);
-    let opening = 32_i64;
     // Phase-dependent material adjustment coefficients, indexed by game phase (0..=32).
     // Each row: [unused0, unused1, unused2, unused3, unused4, bishop_pair, np_bonus, rp_penalty,
     //            bn_vs_rp, redundant_r, redundant_qr]
-    // Columns 0–4 are legacy placeholders retained for index stability; they are never read.
+    // Material table ported from Critter 1.6a (battle-tested engine values).
+    // Columns: Q_val, R_val, B_val, N_val, P_val, bishop_pair, np_bonus,
+    //          rp_penalty, bn_vs_rp, redundant_r, redundant_qr
     let coeff = [
-        [0_i64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [3004, 1533, 910, 875, 298, 118, 13,  0, 13, 82, 41],
         [2964, 1515, 899, 864, 293, 117, 12, 1, 14, 81, 40],
         [2923, 1496, 888, 854, 289, 116, 12, 1, 16, 79, 40],
         [2882, 1477, 877, 843, 284, 114, 12, 2, 18, 78, 39],
@@ -313,18 +365,8 @@ fn material_score(board: &shakmaty::Board, phase: u8) -> GroupValue {
     let white = |role: Role, value: i64| piece_count(board, Color::White, role) * value;
     let black = |role: Role, value: i64| piece_count(board, Color::Black, role) * value;
 
-    let mg = (white(Role::Queen, 3004)
-        + white(Role::Rook, 1533)
-        + white(Role::Bishop, 910)
-        + white(Role::Knight, 875)
-        + white(Role::Pawn, 298))
-        - (black(Role::Queen, 3004)
-            + black(Role::Rook, 1533)
-            + black(Role::Bishop, 910)
-            + black(Role::Knight, 875)
-            + black(Role::Pawn, 298));
-
-    let eg = (white(Role::Queen, 2090)
+    // mg = opening (phase 32) — positional play dominates, pieces worth less
+    let mg = (white(Role::Queen, 2090)
         + white(Role::Rook, 1018)
         + white(Role::Bishop, 708)
         + white(Role::Knight, 653)
@@ -334,6 +376,18 @@ fn material_score(board: &shakmaty::Board, phase: u8) -> GroupValue {
             + black(Role::Bishop, 708)
             + black(Role::Knight, 653)
             + black(Role::Pawn, 190));
+
+    // eg = endgame (phase 0) — material is decisive, pieces worth more
+    let eg = (white(Role::Queen, 3004)
+        + white(Role::Rook, 1533)
+        + white(Role::Bishop, 910)
+        + white(Role::Knight, 875)
+        + white(Role::Pawn, 298))
+        - (black(Role::Queen, 3004)
+            + black(Role::Rook, 1533)
+            + black(Role::Bishop, 910)
+            + black(Role::Knight, 875)
+            + black(Role::Pawn, 298));
 
     let bishop_pair = if piece_count(board, Color::White, Role::Bishop) >= 2 {
         coeff[5]
@@ -404,7 +458,7 @@ fn material_score(board: &shakmaty::Board, phase: u8) -> GroupValue {
     };
 
     let adjustments = bishop_pair + rp_penalty + np_bonus + bn_vs_rp + redundant_r + redundant_qr;
-    let blended = (mg * stage + eg * (opening - stage)) / opening + adjustments;
+    let blended = blend(mg, eg, phase) + adjustments;
 
     let mut terms = serde_json::Map::new();
     terms.insert(
@@ -423,6 +477,30 @@ fn material_score(board: &shakmaty::Board, phase: u8) -> GroupValue {
         "black_rooks".into(),
         serde_json::Value::from(piece_count(board, Color::Black, Role::Rook)),
     );
+    terms.insert(
+        "white_bishops".into(),
+        serde_json::Value::from(piece_count(board, Color::White, Role::Bishop)),
+    );
+    terms.insert(
+        "black_bishops".into(),
+        serde_json::Value::from(piece_count(board, Color::Black, Role::Bishop)),
+    );
+    terms.insert(
+        "white_knights".into(),
+        serde_json::Value::from(piece_count(board, Color::White, Role::Knight)),
+    );
+    terms.insert(
+        "black_knights".into(),
+        serde_json::Value::from(piece_count(board, Color::Black, Role::Knight)),
+    );
+    terms.insert(
+        "white_pawns".into(),
+        serde_json::Value::from(piece_count(board, Color::White, Role::Pawn)),
+    );
+    terms.insert(
+        "black_pawns".into(),
+        serde_json::Value::from(piece_count(board, Color::Black, Role::Pawn)),
+    );
     terms.insert("bishop_pair".into(), serde_json::Value::from(bishop_pair));
     terms.insert("rp_penalty".into(), serde_json::Value::from(rp_penalty));
     terms.insert("np_bonus".into(), serde_json::Value::from(np_bonus));
@@ -431,12 +509,7 @@ fn material_score(board: &shakmaty::Board, phase: u8) -> GroupValue {
     terms.insert("redundant_qr".into(), serde_json::Value::from(redundant_qr));
     terms.insert("adjustments".into(), serde_json::Value::from(adjustments));
 
-    GroupValue {
-        mg,
-        eg,
-        blended,
-        terms,
-    }
+    GroupValue { mg, eg, blended, terms }
 }
 
 fn count_undeveloped(board: &shakmaty::Board, color: Color) -> i64 {
@@ -1434,22 +1507,299 @@ fn detect_discovered(board: &shakmaty::Board, color: Color) -> (i64, Vec<(Square
 }
 
 fn piece_square_name(board: &shakmaty::Board, sq: Square) -> String {
-    // Return a short piece+square like "Nd5" or just square if no piece found.
     if let Some(piece) = board.piece_at(sq) {
         let letter = match piece.role {
-            Role::Pawn => "P",
-            Role::Knight => "N",
-            Role::Bishop => "B",
-            Role::Rook => "R",
-            Role::Queen => "Q",
-            Role::King => "K",
+            Role::Pawn => "P", Role::Knight => "N", Role::Bishop => "B",
+            Role::Rook => "R", Role::Queen => "Q", Role::King => "K",
         };
         return format!("{}{}", letter, sq);
     }
     format!("{}", sq)
 }
 
-fn tactical_score(board: &shakmaty::Board, us: Color, phase: u8) -> GroupValue {
+fn board_to_piece_ref(board: &shakmaty::Board, sq: Square) -> Option<PieceRef> {
+    board.piece_at(sq).map(|p| PieceRef {
+        role: match p.role {
+            Role::Pawn => "Pawn", Role::Knight => "Knight", Role::Bishop => "Bishop",
+            Role::Rook => "Rook", Role::Queen => "Queen", Role::King => "King",
+        }.into(),
+        color: if p.color == Color::White { "white" } else { "black" }.into(),
+        square: sq.to_string(),
+    })
+}
+
+fn forks_to_typed(board: &shakmaty::Board, examples: &[(Square, Vec<Square>)]) -> Vec<Fork> {
+    examples.iter().filter_map(|(att, targets)| {
+        let attacker = board_to_piece_ref(board, *att)?;
+        let targets: Vec<PieceRef> = targets.iter().filter_map(|t| board_to_piece_ref(board, *t)).collect();
+        if targets.len() >= 2 { Some(Fork { attacker, targets }) } else { None }
+    }).collect()
+}
+
+fn pins_to_typed(board: &shakmaty::Board, examples: &[(Square, Square, Square)]) -> Vec<Pin> {
+    examples.iter().filter_map(|(att, pinned, king)| {
+        let attacker = board_to_piece_ref(board, *att)?;
+        let pinned_piece = board_to_piece_ref(board, *pinned)?;
+        let shielded = board_to_piece_ref(board, *king)?;
+        Some(Pin { attacker, pinned: pinned_piece, shielded, pin_type: PinType::Absolute })
+    }).collect()
+}
+
+fn skewers_to_typed(board: &shakmaty::Board, examples: &[(Square, Square, Square)]) -> Vec<Skewer> {
+    examples.iter().filter_map(|(att, front, behind)| {
+        Some(Skewer {
+            attacker: board_to_piece_ref(board, *att)?,
+            front: board_to_piece_ref(board, *front)?,
+            behind: board_to_piece_ref(board, *behind)?,
+        })
+    }).collect()
+}
+
+fn discovered_to_typed(board: &shakmaty::Board, examples: &[(Square, Square, Square)]) -> Vec<DiscoveredAttack> {
+    examples.iter().filter_map(|(blocker, slider, target)| {
+        Some(DiscoveredAttack {
+            mover: board_to_piece_ref(board, *blocker)?,
+            attacker: board_to_piece_ref(board, *slider)?,
+            target: board_to_piece_ref(board, *target)?,
+        })
+    }).collect()
+}
+
+fn outposts_to_typed(board: &shakmaty::Board, examples: &[(Square, Role, Square)]) -> Vec<Outpost> {
+    examples.iter().filter_map(|(sq, role, support)| {
+        let piece = board_to_piece_ref(board, *sq)?;
+        let support_ref = board_to_piece_ref(board, *support).unwrap_or(PieceRef {
+            role: "Pawn".into(), color: "unknown".into(), square: "?".into(),
+        });
+        if matches!(role, Role::Knight | Role::Bishop) {
+            Some(Outpost { piece, supported_by: support_ref })
+        } else { None }
+    }).collect()
+}
+
+// ── 1400 ELO extractors ──
+
+fn extract_passed_pawns(board: &shakmaty::Board) -> Vec<PassedPawn> {
+    let mut results = Vec::new();
+    for color in [Color::White, Color::Black] {
+        for sq in passed_pawn_mask(board, color) {
+            let rank_idx = u32::from(sq.rank());
+            let advance = if color.is_white() { rank_idx } else { 7 - rank_idx };
+            let protected = board.attacks_to(sq, color, board.occupied()).any();
+            results.push(PassedPawn {
+                square: sq.to_string(), rank: advance as u8 + 2,
+                color: if color.is_white() { "white" } else { "black" }.into(),
+                is_protected: protected,
+            });
+        }
+    }
+    results
+}
+
+fn extract_open_files(board: &shakmaty::Board) -> Vec<OpenFile> {
+    let mut results = Vec::new();
+    for file in 0..8u32 {
+        let f = File::new(file);
+        for color in [Color::White, Color::Black] {
+            let own_pawns = board.by_color(color) & board.by_role(Role::Pawn) & Bitboard::from(f);
+            let opp_pawns = board.by_color(color.other()) & board.by_role(Role::Pawn) & Bitboard::from(f);
+            let rook_count = (board.by_color(color) & board.by_role(Role::Rook) & Bitboard::from(f)).count() as u8;
+            if rook_count > 0 && own_pawns.is_empty() {
+                let is_open = opp_pawns.is_empty();
+                results.push(OpenFile {
+                    file: f.to_string(), rook_count,
+                    color: if color.is_white() { "white" } else { "black" }.into(),
+                });
+                if is_open { break; }
+            }
+        }
+    }
+    results
+}
+
+fn extract_hanging_pieces(board: &shakmaty::Board) -> Vec<HangingPiece> {
+    let mut results = Vec::new();
+    let occupied = board.occupied();
+    for color in [Color::White, Color::Black] {
+        let opp = color.other();
+        for sq in board.by_color(color) & !board.by_role(Role::King) {
+            let attackers = board.attacks_to(sq, opp, occupied).count();
+            let defenders = board.attacks_to(sq, color, occupied).count();
+            if attackers > 0 && defenders == 0 {
+                if let Some(piece) = board_to_piece_ref(board, sq) {
+                    results.push(HangingPiece { piece, attacker_count: attackers as u8 });
+                }
+            }
+        }
+    }
+    results
+}
+
+fn extract_king_exposure(board: &shakmaty::Board) -> Vec<KingExposure> {
+    let mut results = Vec::new();
+    for color in [Color::White, Color::Black] {
+        let king_sq = match board.king_of(color) {
+            Some(sq) => sq, None => continue,
+        };
+        let ring = attacks::king_attacks(king_sq) | Bitboard::from(king_sq);
+        let attacker_count = (board.by_color(color.other()) & ring).count() as u8;
+        let file = king_sq.file();
+        let mut shelter_files = 0u8;
+        for df in -1..=1 {
+            if let Some(f) = file.offset(df) {
+                let pawns = board.by_color(color) & board.by_role(Role::Pawn) & Bitboard::from(f);
+                if pawns.any() { shelter_files += 1; }
+            }
+        }
+        if attacker_count > 0 || shelter_files < 2 {
+            results.push(KingExposure { color: if color.is_white() { "white" } else { "black" }.into(), shelter_files, attacker_count });
+        }
+    }
+    results
+}
+
+fn extract_isolated_pawns(board: &shakmaty::Board) -> Vec<IsolatedPawn> {
+    let mut results = Vec::new();
+    for color in [Color::White, Color::Black] {
+        for sq in board.by_color(color) & board.by_role(Role::Pawn) {
+            let file = sq.file();
+            let adjacent = [file.offset(-1), file.offset(1)]
+                .into_iter()
+                .flatten()
+                .filter_map(|f| {
+                    let bb = board.by_color(color) & board.by_role(Role::Pawn) & Bitboard::from(f);
+                    if bb.any() { Some(()) } else { None }
+                })
+                .count();
+            if adjacent == 0 {
+                results.push(IsolatedPawn {
+                    square: sq.to_string(),
+                    color: if color.is_white() { "white" } else { "black" }.into(),
+                });
+            }
+        }
+    }
+    results
+}
+
+fn extract_doubled_pawns(board: &shakmaty::Board) -> Vec<DoubledPawn> {
+    let mut results = Vec::new();
+    for color in [Color::White, Color::Black] {
+        let pawns = board.by_color(color) & board.by_role(Role::Pawn);
+        for file in 0..8u32 {
+            let f = File::new(file);
+            let count = (pawns & Bitboard::from(f)).count() as u8;
+            if count > 1 {
+                results.push(DoubledPawn {
+                    file: f.to_string(), count,
+                    color: if color.is_white() { "white" } else { "black" }.into(),
+                });
+            }
+        }
+    }
+    results
+}
+
+fn extract_pawn_islands(board: &shakmaty::Board) -> Vec<PawnIsland> {
+    let mut results = Vec::new();
+    for color in [Color::White, Color::Black] {
+        let pawns = board.by_color(color) & board.by_role(Role::Pawn);
+        let mut files = Vec::new();
+        let mut prev_had = false;
+        let mut island_count = 0u8;
+        for file in 0..8u32 {
+            let f = File::new(file);
+            let has = (pawns & Bitboard::from(f)).any();
+            if has {
+                files.push(f.to_string());
+                if !prev_had {
+                    island_count += 1;
+                }
+            }
+            prev_had = has;
+        }
+        if island_count > 1 {
+            results.push(PawnIsland {
+                files, count: island_count,
+                color: if color.is_white() { "white" } else { "black" }.into(),
+            });
+        }
+    }
+    results
+}
+
+fn extract_pawn_breaks(groups: &EvalGroups) -> Vec<PawnBreak> {
+    let mut results = Vec::new();
+    let break_examples = groups.pawn_structure.terms.get("pawn_break_examples");
+    let opp_terms = groups.pawn_structure.terms.get("opp_terms")
+        .and_then(|v| v.as_object());
+    let opp_breaks = opp_terms.and_then(|o| o.get("pawn_break_examples"));
+
+    // pawn_break_examples from the us side (for us pawns)
+    if let Some(arr) = break_examples.and_then(|v| v.as_array()) {
+        for ex in arr {
+            if let (Some(pawn), Some(_to)) = (
+                ex.get("pawn").and_then(|v| v.as_str()),
+                ex.get("to").and_then(|v| v.as_str()),
+            ) {
+                results.push(PawnBreak { square: pawn.into(), color: "white".into() });
+            }
+        }
+    }
+    // opp pawn breaks
+    if let Some(arr) = opp_breaks.and_then(|v| v.as_array()) {
+        for ex in arr {
+            if let (Some(pawn), Some(_to)) = (
+                ex.get("pawn").and_then(|v| v.as_str()),
+                ex.get("to").and_then(|v| v.as_str()),
+            ) {
+                results.push(PawnBreak { square: pawn.into(), color: "black".into() });
+            }
+        }
+    }
+    results
+}
+
+fn extract_minority_attack(groups: &EvalGroups) -> Option<MinorityAttack> {
+    let minority_flag = groups.pawn_structure.terms.get("minority_attack")
+        .and_then(|v| v.as_i64()).unwrap_or(0);
+    if minority_flag == 0 { return None; }
+    let strength = groups.pawn_structure.terms.get("minority_attack_strength")
+        .and_then(|v| v.as_i64()).unwrap_or(0);
+    Some(MinorityAttack { color: "white".into(), strength })
+}
+
+fn extract_development_info(board: &shakmaty::Board) -> Vec<DevelopmentInfo> {
+    let mut results = Vec::new();
+    for color in [Color::White, Color::Black] {
+        let undeveloped = count_undeveloped(board, color);
+        let space = development_space_score(board, color, compute_phase(board));
+        if undeveloped > 0 || space < 0 {
+            let pieces: Vec<PieceRef> = {
+                let knight_home = color.fold_wb(
+                    Bitboard::from(Square::B1) | Bitboard::from(Square::G1),
+                    Bitboard::from(Square::B8) | Bitboard::from(Square::G8),
+                );
+                let bishop_home = color.fold_wb(
+                    Bitboard::from(Square::C1) | Bitboard::from(Square::F1),
+                    Bitboard::from(Square::C8) | Bitboard::from(Square::F8),
+                );
+                (board.by_color(color) & (board.by_role(Role::Knight) | board.by_role(Role::Bishop)) & (knight_home | bishop_home))
+                    .into_iter()
+                    .filter_map(|sq| board_to_piece_ref(board, sq))
+                    .collect()
+            };
+            results.push(DevelopmentInfo {
+                color: if color.is_white() { "white" } else { "black" }.into(),
+                undeveloped_pieces: pieces,
+                space_advantage: if color.is_white() { space } else { -space },
+            });
+        }
+    }
+    results
+}
+
+fn tactical_score(board: &shakmaty::Board, us: Color, phase: u8) -> (GroupValue, TacticalReport) {
     let them = us.other();
     let (pins_us, pin_ex_us) = detect_pins(board, us);
     let (pins_them, pin_ex_them) = detect_pins(board, them);
@@ -1626,12 +1976,31 @@ fn tactical_score(board: &shakmaty::Board, us: Color, phase: u8) -> GroupValue {
         }
     }
 
-    GroupValue {
-        mg,
-        eg,
-        blended,
-        terms,
-    }
+    let report = TacticalReport {
+        forks: {
+            let mut v = forks_to_typed(board, &fork_ex_us);
+            v.extend(forks_to_typed(board, &fork_ex_them));
+            v
+        },
+        pins: {
+            let mut v = pins_to_typed(board, &pin_ex_us);
+            v.extend(pins_to_typed(board, &pin_ex_them));
+            v
+        },
+        skewers: {
+            let mut v = skewers_to_typed(board, &skewer_ex_us);
+            v.extend(skewers_to_typed(board, &skewer_ex_them));
+            v
+        },
+        discovered: {
+            let mut v = discovered_to_typed(board, &disc_ex_us);
+            v.extend(discovered_to_typed(board, &disc_ex_them));
+            v
+        },
+        hanging: Vec::new(), // TODO: hanging piece detection
+    };
+
+    (GroupValue { mg, eg, blended, terms }, report)
 }
 
 fn detect_outposts(board: &shakmaty::Board, color: Color) -> (i64, Vec<(Square, Role, Square)>) {
@@ -1798,7 +2167,7 @@ fn vector_features_score(board: &shakmaty::Board, color: Color, phase: u8) -> Gr
     GroupValue {
         mg,
         eg,
-        blended: total,
+        blended: blend(mg, eg, phase),
         terms,
     }
 }
@@ -1914,9 +2283,84 @@ fn strategic_score(
     GroupValue {
         mg,
         eg,
-        blended: total,
+        blended: blend(mg, eg, phase),
         terms,
     }
+}
+
+/// Compute the chaos coefficient: how tactically unstable the position is.
+/// Ranges from 0.0 (clean positional game) to 1.0 (multiple immediate threats).
+/// Digital-switch sensors (forks, pins, checks) fire → chaos rises.
+/// This gates the higher-tier analog sensors through the attenuation matrix.
+fn chaos_coefficient(g: &EvalGroups) -> f64 {
+    let t = &g.tactical.terms;
+    let s = &g.strategic.terms;
+    let ks = &g.king_safety.terms;
+
+    let term_i64 = |key: &str| -> i64 {
+        t.get(key).and_then(|v| v.as_i64()).unwrap_or(0)
+    };
+
+    let forks = term_i64("forks_us") + term_i64("forks_them");
+    let pins = term_i64("pins_us") + term_i64("pins_them");
+    let skewers = term_i64("skewers_us") + term_i64("skewers_them");
+    // discovered attacks fire too broadly (even in opening) — excluded from chaos
+
+    let in_check = ks.get("in_check").and_then(|v| v.as_bool()).unwrap_or(false);
+    let hanging = s.get("hanging").and_then(|v| v.as_i64()).unwrap_or(0);
+    let king_exposed = s.get("king_exposed")
+        .and_then(|v| v.as_bool()).unwrap_or(false);
+
+    let threat_count = (forks + pins + skewers + hanging) as f64;
+    let chaos_base = threat_count * 0.15;
+    let chaos_bonus = if in_check { 0.4 } else { 0.0 }
+                    + if king_exposed { 0.3 } else { 0.0 };
+
+    (chaos_base + chaos_bonus).min(1.0)
+}
+
+fn compute_aggregates(g: &mut EvalGroups) {
+    use crate::eval::concepts::{SensorTier, attenuation};
+
+    let chaos = chaos_coefficient(g);
+    let chaos_i64 = (chaos * 100.0) as i64; // store as 0-100
+
+    // Material: always active (Survival tier, attenuation = 1.0)
+    let material = g.material.blended;
+    g.material_total = ScalarValue { value: material, factor: chaos_i64 };
+
+    // Positional: structural components with tier-specific attenuation
+    fn compute_attenuated(value: i64, chaos: f64, tier: SensorTier) -> i64 {
+        let att = attenuation(tier, chaos);
+        (value as f64 * att).round() as i64
+    }
+
+    // Pawn structure and passed pawns: Positional tier (half-attenuated)
+    let pawn = compute_attenuated(g.pawn_structure.blended, chaos, SensorTier::Positional);
+    // Piece activity (outposts, rooks): Positional tier
+    let activity = compute_attenuated(g.piece_activity.blended, chaos, SensorTier::Positional);
+    // King safety: Positional tier 
+    let king_safe = compute_attenuated(g.king_safety.blended, chaos, SensorTier::Positional);
+    // Development: Positional tier
+    let dev = compute_attenuated(g.development.blended, chaos, SensorTier::Positional);
+    // Vector features (center control, coordination): Positional tier
+    let vectors = compute_attenuated(g.vector_features.blended, chaos, SensorTier::Positional);
+    // Strategic (initiative, minority attack): Strategic tier (fully attenuated)
+    let strategic = compute_attenuated(g.strategic.blended, chaos, SensorTier::Strategic);
+    // Passed pawns: Positional tier
+    let passed = compute_attenuated(g.passed_pawns.blended, chaos, SensorTier::Positional);
+    // Scaling and drawishness are meta-concepts, not attenuated
+    let scaling = g.scaling.value;
+    let drawishness = g.drawishness.value;
+    let override_ = g.override_.value;
+
+    let attenuated_positional = pawn + activity + king_safe + passed + dev + vectors + strategic
+        + scaling + drawishness + override_;
+    g.positional_total = ScalarValue { value: attenuated_positional, factor: chaos_i64 };
+
+    // Tactical: Threat tier — always active (attenuation = 1.0)
+    let tactical = g.tactical.blended;
+    g.tactical_total = ScalarValue { value: tactical, factor: 0 };
 }
 
 fn sum_groups(groups: &EvalGroups) -> i64 {
@@ -1996,12 +2440,13 @@ fn draw_weight(board: &shakmaty::Board, color: Color) -> i64 {
     open_file_mult[open as usize] * pawn_count_mult[all as usize]
 }
 
-fn compute_groups(chess: &Chess, phase: u8, legal_move_count: usize) -> EvalGroups {
+pub fn compute_groups(chess: &Chess, phase: u8, legal_move_count: usize) -> EvalGroups {
     let board = chess.board();
     let us = chess.turn();
     let them = us.other();
     let in_check = chess.is_check();
 
+    let w = weights();
     let material = material_score(board, phase);
     let (pawn_us, pawn_us_terms) = pawn_structure_score(board, us, phase);
     let (pawn_them, pawn_them_terms) = pawn_structure_score(board, them, phase);
@@ -2013,18 +2458,41 @@ fn compute_groups(chess: &Chess, phase: u8, legal_move_count: usize) -> EvalGrou
 
     let mut pawn_structure = GroupValue::default();
     let pawn_total = pawn_us - pawn_them;
-    let (pawn_mg, pawn_eg) = phase_split(pawn_total, phase);
+    let (pawn_mg, pawn_eg) = phase_split(pawn_total, biased_phase(phase, w.phase_bias_pawn_structure));
     pawn_structure.mg = pawn_mg;
     pawn_structure.eg = pawn_eg;
-    pawn_structure.blended = pawn_total;
-    pawn_structure.terms = pawn_us_terms;
+    pawn_structure.blended = blend(pawn_mg, pawn_eg, biased_phase(phase, w.phase_bias_pawn_structure));
+    pawn_structure.terms = pawn_us_terms.clone();
     pawn_structure
         .terms
         .insert("opp_total".into(), serde_json::Value::from(pawn_them));
     pawn_structure.terms.insert(
         "opp_terms".into(),
-        serde_json::Value::Object(pawn_them_terms),
+        serde_json::Value::Object(pawn_them_terms.clone()),
     );
+
+    // Synthesize per-color terms for concepts.rs extract_concepts
+    for key in &["isolated", "doubled", "candidate", "weak", "chain", "passed", "islands",
+                  "majority_queenside", "majority_center", "majority_kingside",
+                  "minority_attack", "minority_attack_strength", "pawn_breaks"] {
+        if let Some(v) = pawn_us_terms.get(*key) {
+            pawn_structure.terms.insert(format!("{}_us", key).into(), v.clone());
+        }
+        if let Some(v) = pawn_them_terms.get(*key) {
+            pawn_structure.terms.insert(format!("{}_them", key).into(), v.clone());
+        }
+    }
+    // Synthesize aggregate majority counts
+    let majority_us: i64 = ["majority_queenside", "majority_center", "majority_kingside"]
+        .iter()
+        .filter_map(|k| pawn_us_terms.get(*k).and_then(|v| v.as_i64()))
+        .sum();
+    let majority_them: i64 = ["majority_queenside", "majority_center", "majority_kingside"]
+        .iter()
+        .filter_map(|k| pawn_them_terms.get(*k).and_then(|v| v.as_i64()))
+        .sum();
+    pawn_structure.terms.insert("majority_us".into(), serde_json::Value::from(majority_us));
+    pawn_structure.terms.insert("majority_them".into(), serde_json::Value::from(majority_them));
 
     let mut piece_activity = GroupValue::default();
     let (piece_us, piece_us_terms) = piece_activity_score(
@@ -2042,10 +2510,10 @@ fn compute_groups(chess: &Chess, phase: u8, legal_move_count: usize) -> EvalGrou
         king_ring(board, them),
     );
     let piece_total = piece_us - piece_them;
-    let (piece_mg, piece_eg) = phase_split(piece_total, phase);
+    let (piece_mg, piece_eg) = phase_split(piece_total, biased_phase(phase, w.phase_bias_piece_activity));
     piece_activity.mg = piece_mg;
     piece_activity.eg = piece_eg;
-    piece_activity.blended = piece_total;
+    piece_activity.blended = blend(piece_mg, piece_eg, biased_phase(phase, w.phase_bias_piece_activity));
     piece_activity.terms = piece_us_terms;
     piece_activity.terms.insert(
         "legal_move_count".into(),
@@ -2062,7 +2530,6 @@ fn compute_groups(chess: &Chess, phase: u8, legal_move_count: usize) -> EvalGrou
     // Outpost detection: add as a piece activity term, with example context
     let (outposts_us, out_ex_us) = detect_outposts(board, us);
     let (outposts_them, out_ex_them) = detect_outposts(board, them);
-    let w = weights();
     let outpost_delta = outposts_us * w.outpost_weight - outposts_them * w.outpost_weight;
     piece_activity.blended += outpost_delta;
     piece_activity.terms.insert("outposts_us".into(), serde_json::Value::from(outposts_us));
@@ -2109,13 +2576,14 @@ fn compute_groups(chess: &Chess, phase: u8, legal_move_count: usize) -> EvalGrou
     }
 
     let mut king_safety_group = GroupValue::default();
-    let (king_mg, king_eg) = phase_split(king_safety, phase);
+    let (king_mg, king_eg) = phase_split(king_safety, biased_phase(phase, w.phase_bias_king_safety));
     king_safety_group.mg = king_mg;
     king_safety_group.eg = king_eg;
     // augment king safety with king tropism (GUESS weights)
     let tropism_us = king_tropism_score(board, us);
     let tropism_them = king_tropism_score(board, them);
-    king_safety_group.blended = king_safety + (tropism_us - tropism_them);
+    king_safety_group.blended = blend(king_mg, king_eg, biased_phase(phase, w.phase_bias_king_safety))
+        + (tropism_us - tropism_them);
     king_safety_group
         .terms
         .insert("in_check".into(), serde_json::Value::from(in_check));
@@ -2128,10 +2596,10 @@ fn compute_groups(chess: &Chess, phase: u8, legal_move_count: usize) -> EvalGrou
 
     let mut passed_pawns = GroupValue::default();
     let passed_total = passed_us - passed_them;
-    let (passed_mg, passed_eg) = phase_split(passed_total, phase);
+    let (passed_mg, passed_eg) = phase_split(passed_total, biased_phase(phase, w.phase_bias_passed_pawns));
     passed_pawns.mg = passed_mg;
     passed_pawns.eg = passed_eg;
-    passed_pawns.blended = passed_total;
+    passed_pawns.blended = blend(passed_mg, passed_eg, biased_phase(phase, w.phase_bias_passed_pawns));
     passed_pawns.terms = passed_us_terms;
     passed_pawns
         .terms
@@ -2145,10 +2613,10 @@ fn compute_groups(chess: &Chess, phase: u8, legal_move_count: usize) -> EvalGrou
     let dev_space_us = development_space_score(board, us, phase);
     let dev_space_them = development_space_score(board, them, phase);
     let dev_total = dev_diff + (dev_space_us - dev_space_them);
-    let (dev_mg, dev_eg) = phase_split(dev_total, phase);
+    let (dev_mg, dev_eg) = phase_split(dev_total, biased_phase(phase, w.phase_bias_development));
     development.mg = dev_mg;
     development.eg = dev_eg;
-    development.blended = dev_total;
+    development.blended = blend(dev_mg, dev_eg, biased_phase(phase, w.phase_bias_development));
     development
         .terms
         .insert("development_diff".into(), serde_json::Value::from(dev_diff));
@@ -2159,13 +2627,16 @@ fn compute_groups(chess: &Chess, phase: u8, legal_move_count: usize) -> EvalGrou
         .terms
         .insert("space_them".into(), serde_json::Value::from(dev_space_them));
 
-    let vector_features = vector_features_score(board, us, phase);
-    let strategic = strategic_score(board, us, legal_move_count, phase);
-    let tactical = tactical_score(board, us, phase);
+    let vector_features = vector_features_score(board, us, biased_phase(phase, w.phase_bias_vector_features));
+    let strategic = strategic_score(board, us, legal_move_count, biased_phase(phase, w.phase_bias_strategic));
+    let (tactical, _tactical_report) = tactical_score(board, us, phase);
 
     let scaling_factor = win_chance_scale(board, &material);
 
     let mut groups = EvalGroups {
+        material_total: ScalarValue::default(),
+        positional_total: ScalarValue::default(),
+        tactical_total: ScalarValue::default(),
         material,
         pawn_structure,
         piece_activity,
@@ -2199,7 +2670,117 @@ fn compute_groups(chess: &Chess, phase: u8, legal_move_count: usize) -> EvalGrou
         0
     };
     groups.drawishness.value = draw_delta;
+    compute_aggregates(&mut groups);
     groups
+}
+
+fn get_term_i64(terms: &serde_json::Map<String, serde_json::Value>, key: &str) -> i64 {
+    terms.get(key).and_then(|v| v.as_i64()).unwrap_or(0)
+}
+
+fn build_material_balance(groups: &EvalGroups) -> Option<MaterialBalance> {
+    let t = &groups.material.terms;
+    let white = PieceCounts {
+        queens: get_term_i64(t, "white_queens") as u8,
+        rooks: get_term_i64(t, "white_rooks") as u8,
+        bishops: get_term_i64(t, "white_bishops") as u8,
+        knights: get_term_i64(t, "white_knights") as u8,
+        pawns: get_term_i64(t, "white_pawns") as u8,
+    };
+    let black = PieceCounts {
+        queens: get_term_i64(t, "black_queens") as u8,
+        rooks: get_term_i64(t, "black_rooks") as u8,
+        bishops: get_term_i64(t, "black_bishops") as u8,
+        knights: get_term_i64(t, "black_knights") as u8,
+        pawns: get_term_i64(t, "black_pawns") as u8,
+    };
+    let bishop_pair_white = get_term_i64(t, "white_bishops") >= 2;
+    let bishop_pair_black = get_term_i64(t, "black_bishops") >= 2;
+    let centipawns = groups.material_total.value;
+    Some(MaterialBalance { white, black, centipawns, bishop_pair_white, bishop_pair_black })
+}
+
+pub fn build_sensor_report(board: &shakmaty::Board, fen: &str, groups: &EvalGroups, chess: &Chess, phase: u8) -> SensorReport {
+    let us = chess.turn();
+    let them = us.other();
+    let (_, fork_ex_us) = detect_forks(board, us);
+    let (_, fork_ex_them) = detect_forks(board, them);
+    let (_, pin_ex_us) = detect_pins(board, us);
+    let (_, pin_ex_them) = detect_pins(board, them);
+    let (_, skewer_ex_us) = detect_skewers(board, us);
+    let (_, skewer_ex_them) = detect_skewers(board, them);
+    let (_, disc_ex_us) = detect_discovered(board, us);
+    let (_, disc_ex_them) = detect_discovered(board, them);
+
+    let tactical = TacticalReport {
+        forks: { let mut v = forks_to_typed(board, &fork_ex_us); v.extend(forks_to_typed(board, &fork_ex_them)); v },
+        pins: { let mut v = pins_to_typed(board, &pin_ex_us); v.extend(pins_to_typed(board, &pin_ex_them)); v },
+        skewers: { let mut v = skewers_to_typed(board, &skewer_ex_us); v.extend(skewers_to_typed(board, &skewer_ex_them)); v },
+        discovered: { let mut v = discovered_to_typed(board, &disc_ex_us); v.extend(discovered_to_typed(board, &disc_ex_them)); v },
+        hanging: extract_hanging_pieces(board),
+    };
+
+    let positional = PositionalReport {
+        outposts: {
+            let (_, out_ex_us) = detect_outposts(board, us);
+            let (_, out_ex_them) = detect_outposts(board, them);
+            let mut v = outposts_to_typed(board, &out_ex_us);
+            v.extend(outposts_to_typed(board, &out_ex_them));
+            v
+        },
+        open_files: extract_open_files(board),
+        passed_pawns: extract_passed_pawns(board),
+        doubled_pawns: extract_doubled_pawns(board),
+        isolated_pawns: extract_isolated_pawns(board),
+        pawn_islands: extract_pawn_islands(board),
+        pawn_breaks: extract_pawn_breaks(groups),
+        minority_attack: extract_minority_attack(groups),
+        king_exposure: {
+            let exposures = extract_king_exposure(board);
+            if exposures.len() >= 2 {
+                exposures.into_iter().max_by_key(|k| k.attacker_count)
+            } else {
+                exposures.into_iter().next()
+            }
+        },
+        development: {
+            let dev_infos = extract_development_info(board);
+            let target_color = if us.is_white() { "white" } else { "black" };
+            let dev_first = dev_infos.iter().find(|d| d.color == target_color);
+            dev_first.cloned().or_else(|| dev_infos.first().cloned())
+        },
+    };
+
+    let material = {
+        let balance = build_material_balance(groups);
+        MaterialConceptReport { balance, redundancy: Vec::new() }
+    };
+
+    // Build state_id from components before assembling SensorReport
+    let state_id = {
+        // Temporary SensorReport for state encoding only
+        let tmp = SensorReport {
+            fen: fen.to_string(), state_id: 0,
+            material: material.clone(), tactical: tactical.clone(), positional: positional.clone(),
+            aggregated: AggregatedScores::default(),
+        };
+        crate::eval::concepts::encode_state(&tmp, groups, phase).state_id
+    };
+
+    SensorReport {
+        fen: fen.to_string(),
+        state_id,
+        material,
+        tactical,
+        positional,
+        aggregated: AggregatedScores {
+            material_cp: groups.material_total.value,
+            positional_cp: groups.positional_total.value,
+            tactical_cp: groups.tactical_total.value,
+            total_cp: groups.material_total.value + groups.positional_total.value + groups.tactical_total.value,
+            chaos: chaos_coefficient(groups),
+        },
+    }
 }
 
 pub fn analyze_fen(fen: &str) -> Result<PositionRecord> {
@@ -2220,6 +2801,7 @@ pub fn analyze_fen_with_engine_score(
     let phase = compute_phase(chess.board());
     let legal_move_count = chess.legal_moves().len();
     let groups = compute_groups(&chess, phase, legal_move_count);
+    let sensor_report = build_sensor_report(chess.board(), fen, &groups, &chess, phase);
     let final_score = sum_groups(&groups);
     let delta = engine_score.map(|score| final_score - score);
     let sum_groups_match = delta.map(|d| d == 0).unwrap_or(true);
@@ -2245,6 +2827,7 @@ pub fn analyze_fen_with_engine_score(
             matches_final: sum_groups_match,
             delta,
         },
+        sensor_report,
     })
 }
 
