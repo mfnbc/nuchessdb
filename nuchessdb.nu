@@ -505,7 +505,7 @@ def main [--limit: int, ...args] {
         }
         "derive-coach" => {
             if ($rest | is-empty) { print "Provide username"; return }
-            nu derive-coach.nu $rest.0 --db ../chess.db
+            nu derive-coach.nu $rest.0 --db ./chess.db
         }
         "dictionary-update" => {
             if ($rest | is-empty) { print "Provide username"; return }
