@@ -6,7 +6,7 @@ use serde::Deserialize;
 
 #[derive(Deserialize)]
 struct InputRecord {
-    id: Option<String>,
+    _id: Option<String>,
     fen: String,
     engine_score: Option<i64>,
 }
@@ -293,7 +293,7 @@ fn univariate_calibration(rows: &[RegressionRow]) -> (f64,f64) {
     if vx.abs()>1e-12 { let a=(sxy/nf-mx*my)/vx; (a,my-a*mx) } else { (0.0,my) }
 }
 
-fn gen_weights(beta: &[f64], names: &[&str], path: &str) {
+fn gen_weights(beta: &[f64], _names: &[&str], path: &str) {
     let comps: [(usize,&str);8] = [(2,"material"),(3,"pawn_structure"),(4,"piece_activity"),(5,"king_safety"),(6,"passed_pawns"),(7,"development"),(8,"vector_features"),(9,"strategic")];
     let coeffs: Vec<f64> = comps.iter().map(|(i,_)| beta[*i]).collect();
     let mean = coeffs.iter().sum::<f64>() / coeffs.len() as f64;
@@ -340,6 +340,7 @@ fn gen_weights(beta: &[f64], names: &[&str], path: &str) {
 }
 
 impl RegressionRow {
+    #[allow(dead_code)]
     fn hugm_raw(&self) -> i64 {
         self.material + self.pawn_structure + self.piece_activity + self.king_safety
         + self.passed_pawns + self.development + self.vector_features + self.strategic

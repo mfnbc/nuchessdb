@@ -1,7 +1,5 @@
 use std::env;
 use std::io::{self, BufRead};
-use std::fs::File;
-use std::io::Read;
 use serde_json::json;
 
 use nu_plugin_chessdb::core::pgn_to_batch_record;

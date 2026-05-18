@@ -462,7 +462,7 @@ def coach-review-game [game_id: int, --perspective: string = "white"] {
 }
 
 # --- 4. Main Interface ---
-def main [...args] {
+def main [--limit: int, ...args] {
     if ($args | is-empty) { print-help; return }
     let cmd = $args.0
     let rest = if ($args | length) > 1 { $args | skip 1 } else { [] }
@@ -470,11 +470,12 @@ def main [...args] {
     match $cmd {
         "init" => { init-schema }
         "sync" => { 
-            if ($rest | length) > 1 { 
-                let limit = ($rest.1 | into int)
-                sync-chesscom $rest.0 --limit $limit
+            if ($rest | is-empty) { print "Provide chess.com username"; return }
+            let user = $rest.0
+            if ($limit != null) {
+                sync-chesscom $user --limit $limit
             } else {
-                sync-chesscom $rest.0
+                sync-chesscom $user
             }
         }
         "explore" => {
@@ -529,7 +530,7 @@ def print-help [] {
 
 COMMANDS:
   init                     Initialize relational analytics engine
-  sync <user>              Stream games from chess.com
+  sync <user> [--limit N]     Stream games from chess.com (--limit N for last N archives)
   recent [n]               List the n most recent games and their IDs (default 5)
   explore <zobrist>        Show move frequencies and ELO performance for a position
   review <game_id>         Show move-by-move engine evaluations for a specific game

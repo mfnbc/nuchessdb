@@ -2,7 +2,7 @@ use nu_plugin::{EvaluatedCall, PluginCommand};
 use nu_protocol::{Category, LabeledError, PipelineData, Signature, Type, Value, record};
 use serde_json::Value as JsonValue;
 use std::collections::HashSet;
-use chrono::NaiveDateTime;
+use chrono::DateTime;
 
 use crate::ChessdbPlugin;
 use crate::PLUGIN_CATEGORY;
@@ -93,33 +93,33 @@ impl PluginCommand for ProcessCorpus {
             
             // Extract the result relative to the user
             let mut result_str = "unknown".to_string();
-            let mut platform = if url.contains("chess.com") { "chesscom".to_string() } else { "lichess".to_string() };
-            let mut white_name = g.get("white").and_then(|w| w.get("username")).and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let mut black_name = g.get("black").and_then(|b| b.get("username")).and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let mut white_elo = g.get("white").and_then(|w| w.get("rating")).and_then(|v| v.as_i64()).unwrap_or(0);
-            let mut black_elo = g.get("black").and_then(|b| b.get("rating")).and_then(|v| v.as_i64()).unwrap_or(0);
+            let platform = if url.contains("chess.com") { "chesscom".to_string() } else { "lichess".to_string() };
+            let white_name = g.get("white").and_then(|w| w.get("username")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let black_name = g.get("black").and_then(|b| b.get("username")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let white_elo = g.get("white").and_then(|w| w.get("rating")).and_then(|v| v.as_i64()).unwrap_or(0);
+            let black_elo = g.get("black").and_then(|b| b.get("rating")).and_then(|v| v.as_i64()).unwrap_or(0);
             let mut played_at = "unknown".to_string();
-            let mut time_control = g.get("time_control").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+            let time_control = g.get("time_control").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
             let mut eco = "unknown".to_string();
             let mut opening = "unknown".to_string();
 
             // Extract played_at from known fields (chess.com: end_time in seconds, lichess: lastMoveAt in ms or createdAt)
             if let Some(end_time) = g.get("end_time").and_then(|v| v.as_i64()) {
                 if end_time > 0 {
-                    if let Some(dt) = NaiveDateTime::from_timestamp_opt(end_time, 0) {
+                    if let Some(dt) = DateTime::from_timestamp(end_time, 0) {
                         played_at = dt.format("%Y-%m-%dT%H:%M:%SZ").to_string();
                     }
                 }
             } else if let Some(last_move_at) = g.get("lastMoveAt").and_then(|v| v.as_i64()) {
                 if last_move_at > 0 {
                     let secs = last_move_at / 1000;
-                    if let Some(dt) = NaiveDateTime::from_timestamp_opt(secs, 0) {
+                    if let Some(dt) = DateTime::from_timestamp(secs, 0) {
                         played_at = dt.format("%Y-%m-%dT%H:%M:%SZ").to_string();
                     }
                 }
             } else if let Some(created_at) = g.get("createdAt").and_then(|v| v.as_i64()) {
                 let secs = if created_at > 1_000_000_000_000 { created_at / 1000 } else { created_at };
-                if let Some(dt) = NaiveDateTime::from_timestamp_opt(secs, 0) {
+                if let Some(dt) = DateTime::from_timestamp(secs, 0) {
                     played_at = dt.format("%Y-%m-%dT%H:%M:%SZ").to_string();
                 }
             } else if let Some(played_str) = g.get("played_at").and_then(|v| v.as_str()) {

@@ -1,6 +1,6 @@
 use std::env;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Write};
 use serde_json::Value;
 use nu_plugin_chessdb::core::pgn_to_batch_record;
 use nu_protocol::Span;
