@@ -445,10 +445,10 @@ def coach-review-game [game_id: int, --perspective: string = "white"] {
             scores: $report.aggregated,
         }
 
-        # 7. Call nu-agent engine (resolved relative to repo root)
-        let engine_path = "../nu-agent/engine.nu"
+        # 7. Call nu-agent CLI (canonical entry point — handles config cascade)
+        let agent_path = "../nu-agent/nu-agent"
         let contract_path = "../nu-agent/contracts/chess_coach.toml"
-        let coach_json = (nu $engine_path run $contract_path ($coach_input | to json -r) | str trim)
+        let coach_json = (nu $agent_path --prompt ($coach_input | to json -r) --contract $contract_path | str trim)
 
         if ($coach_json | str starts-with "```") {
             # Strip markdown code fences
