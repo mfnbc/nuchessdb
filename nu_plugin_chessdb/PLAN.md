@@ -203,6 +203,9 @@ Completed features:
 - ✅ state_id in positions table + migrate_states population during ingest
 - ✅ coach-review command (anomaly-first, eval-drop fallback, LLM enrichment)
 - ✅ derive-coach command (Welford baselines, z-score anomalies, state transitions)
+- ✅ derive-coach.nu standalone script (extracted from nuchessdb.nu, DB-based)
+- ✅ dictionary-update.nu — incremental Tier-1000 Welford update from gated_issues
+- ✅ validate-gate.nu — anomaly intercept gate (3-line JSON shutdown block)
 - ✅ Elo Sensor Taxonomy: SensorTier enum, tier_for_concept, attenuation matrix
 - ✅ Convergence Gate: chaos_coefficient from tactical sensors, tiered attenuation in compute_aggregates
 - ✅ Idempotent sync merge (INSERT OR IGNORE via sqlite3)

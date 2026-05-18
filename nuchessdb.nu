@@ -259,69 +259,6 @@ def import-records [games: list, platform: string, username: string] {
         }
 }
 
-# --- 2c. Coach Derivation ---
-def derive-coach [username: string] {
-    let db = (_db_path)
-
-    # Query all moves for this player with FEN and score
-    let rows = (open $db | query db "
-        SELECT m.game_id, m.ply, p.fen, p.hugm_score,
-               CASE WHEN m.color = 'white' THEN g.white ELSE g.black END as player
-        FROM moves m
-        JOIN positions p ON m.next_position_id = p.zobrist
-        JOIN games g ON m.game_id = g.game_id
-        WHERE g.white = ? OR g.black = ?
-        ORDER BY m.game_id, m.ply
-    " --params [$username, $username])
-
-    if ($rows | is-empty) {
-        print $"No moves found for ($username)"
-        return
-    }
-
-    print $"Deriving coach signals for ($username) from ($rows | length) moves..."
-
-    # Run plugin
-    let signals = ($rows | chessdb derive-coach-signals --min-games 10)
-
-    # Insert baselines — rename, deduplicate, then insert
-    if ($signals.baselines | length) > 0 {
-        $signals.baselines
-        | rename username concept_name phase_bucket mean std
-        | insert m2 {|r| $r.std * $r.std}
-        | insert count { 1 }
-        | insert last_updated { (date now | format date "%Y-%m-%dT%H:%M:%SZ") }
-        | select username concept_name phase_bucket mean m2 count last_updated
-        | uniq-by username concept_name phase_bucket
-        | into sqlite $db -t player_baselines
-        | ignore
-    }
-
-    # Insert anomalies — rename to match DB schema
-    if ($signals.anomalies | length) > 0 {
-        $signals.anomalies
-        | rename username game_id ply state_id anomaly_type concept_name z_score severity
-        | insert consumed { false }
-        | insert created_at { (date now | format date "%Y-%m-%dT%H:%M:%SZ") }
-        | select username game_id ply state_id anomaly_type concept_name z_score severity created_at consumed
-        | into sqlite $db -t move_anomalies
-        | ignore
-    }
-
-    # Insert transitions — add username, deduplicate
-    if ($signals.transitions | length) > 0 {
-        $signals.transitions
-        | insert username { $username }
-        | insert last_updated { (date now | format date "%Y-%m-%dT%H:%M:%SZ") }
-        | select username state_from state_to total_count blunder_count last_updated
-        | uniq-by username state_from state_to
-        | into sqlite $db -t transition_events
-        | ignore
-    }
-
-    print $"Derived: ($signals.baselines | length) baselines, ($signals.anomalies | length) anomalies, ($signals.transitions | length) transitions"
-}
-
 # --- 3. Analytics & Intelligence ---
 def analyze-position [fen: string, weights_path: string = "./weights.json"] {
     # Calls the resurrected Rust engine modules
@@ -567,7 +504,16 @@ def main [...args] {
         }
         "derive-coach" => {
             if ($rest | is-empty) { print "Provide username"; return }
-            derive-coach $rest.0
+            nu derive-coach.nu $rest.0 --db ../chess.db
+        }
+        "dictionary-update" => {
+            if ($rest | is-empty) { print "Provide username"; return }
+            nu dictionary-update.nu $rest.0
+        }
+        "validate-gate" => {
+            if ($rest | is-empty) { print "Provide username and game_id"; return }
+            let game_id = ($rest.1 | into int)
+            nu validate-gate.nu $rest.0 $game_id
         }
         "status" => {
             let db = (_db_path)
@@ -588,6 +534,8 @@ COMMANDS:
   explore <zobrist>        Show move frequencies and ELO performance for a position
   review <game_id>         Show move-by-move engine evaluations for a specific game
   coach-review <game_id> [perspective]  AI coaching with anomaly detection (default: white)
-  derive-coach <username>             Compute per-player baselines and anomaly alerts
+  derive-coach <username>             Compute per-player baselines and anomaly alerts (standalone)
+  dictionary-update <username> [--limit N]  Update Tier 1000 blunder sensor Welford states
+  validate-gate <username> <game_id>    Anomaly intercept gate (3-line JSON output)
   status                             Platform health and data counts" 
 }

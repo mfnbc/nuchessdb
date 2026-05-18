@@ -89,7 +89,9 @@ All commands are run via: `nu nuchessdb.nu <command> [args]`
 | `review <game_id>` | Show move-by-move HUGM evaluations for a game | ✅ |
 | `status` | Database counts (games, positions, moves) | ✅ |
 | `coach-review <game_id> [perspective]` | LLM-powered Socratic coaching with anomaly detection | ✅ |
-| `derive-coach <username>` | Compute per-player baselines and anomaly alerts | ✅ |
+| `derive-coach <username>` | DERIVE phase: batch baselines, anomalies, transitions via Rust plugin | ✅ |
+| `dictionary-update <username> [--limit N]` | Incremental Tier-1000 Welford update from gated_issues | ✅ |
+| `validate-gate <username> <game_id>` | Anomaly intercept gate — 3-line JSON shutdown block | ✅ |
 | `import <path.pgn>` | Import PGN file into database | 🚧 planned |
 
 Run `nu nuchessdb.nu help` for complete usage information.
@@ -108,6 +110,7 @@ The `nu_plugin_chessdb` Rust plugin exposes these commands directly in Nushell:
 | `chessdb bullet-build` | Build bullet-format training shards | 🚧 |
 | `chessdb pgn-scan` | Scan PGN text for game count, validation | ✅ |
 | `chessdb zobrist` | Compute zobrist hash from FEN | ✅ |
+| `chessdb derive-coach-signals` | Batch Welford baselines + z-score anomaly detection + state transitions | ✅ |
 
 ### Plugin output contract (stable)
 
