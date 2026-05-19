@@ -102,8 +102,8 @@ def main [username: string, --db: string, --limit: int = 100] {
 
             mut concepts = []
 
-            # Forks — track if the hanging piece was captured next move
-            for f in $report.tactical.forks {
+            # Forks — from ThreatGraph with SEE consequence
+            for f in ($report.evaluated_forks | default []) {
                 $concepts = ($concepts | append { name: "fork", severity: 240 })
                 if ($f.hangs | is-not-empty) and ($next_dest | is-not-empty) {
                     if $next_dest == $f.hangs.square {

@@ -4,7 +4,7 @@ use shakmaty::{attacks, fen::Fen, Bitboard, Chess, Color, File, Position, Rank, 
 
 use crate::eval::concept_types::*;
 use crate::eval::sensor::{TacticalReport, PositionalReport, SensorReport, AggregatedScores, MaterialConceptReport};
-use crate::eval::threat_graph::{EvaluatedFork, ExchangeChain};
+use crate::eval::threat_graph::ExchangeChain;
 
 // Configurable constants (GUESS values) collected here for easier tuning.
 const TACTICAL_BASE_PINS: i64 = 50;
@@ -1529,43 +1529,6 @@ fn board_to_piece_ref(board: &shakmaty::Board, sq: Square) -> Option<PieceRef> {
     })
 }
 
-fn forks_to_typed(board: &shakmaty::Board, examples: &[(Square, Vec<Square>)]) -> Vec<Fork> {
-    examples.iter().filter_map(|(att, targets)| {
-        let attacker = board_to_piece_ref(board, *att)?;
-        let targets: Vec<PieceRef> = targets.iter().filter_map(|t| board_to_piece_ref(board, *t)).collect();
-        if targets.len() >= 2 { Some(Fork { attacker, targets, hangs: None }) } else { None }
-    }).collect()
-}
-
-fn pins_to_typed(board: &shakmaty::Board, examples: &[(Square, Square, Square)]) -> Vec<Pin> {
-    examples.iter().filter_map(|(att, pinned, king)| {
-        let attacker = board_to_piece_ref(board, *att)?;
-        let pinned_piece = board_to_piece_ref(board, *pinned)?;
-        let shielded = board_to_piece_ref(board, *king)?;
-        Some(Pin { attacker, pinned: pinned_piece, shielded, pin_type: PinType::Absolute })
-    }).collect()
-}
-
-fn skewers_to_typed(board: &shakmaty::Board, examples: &[(Square, Square, Square)]) -> Vec<Skewer> {
-    examples.iter().filter_map(|(att, front, behind)| {
-        Some(Skewer {
-            attacker: board_to_piece_ref(board, *att)?,
-            front: board_to_piece_ref(board, *front)?,
-            behind: board_to_piece_ref(board, *behind)?,
-        })
-    }).collect()
-}
-
-fn discovered_to_typed(board: &shakmaty::Board, examples: &[(Square, Square, Square)]) -> Vec<DiscoveredAttack> {
-    examples.iter().filter_map(|(blocker, slider, target)| {
-        Some(DiscoveredAttack {
-            mover: board_to_piece_ref(board, *blocker)?,
-            attacker: board_to_piece_ref(board, *slider)?,
-            target: board_to_piece_ref(board, *target)?,
-        })
-    }).collect()
-}
-
 fn outposts_to_typed(board: &shakmaty::Board, examples: &[(Square, Role, Square)]) -> Vec<Outpost> {
     examples.iter().filter_map(|(sq, role, support)| {
         let piece = board_to_piece_ref(board, *sq)?;
@@ -1612,24 +1575,6 @@ fn extract_open_files(board: &shakmaty::Board) -> Vec<OpenFile> {
                     color: if color.is_white() { "white" } else { "black" }.into(),
                 });
                 if is_open { break; }
-            }
-        }
-    }
-    results
-}
-
-fn extract_hanging_pieces(board: &shakmaty::Board) -> Vec<HangingPiece> {
-    let mut results = Vec::new();
-    let occupied = board.occupied();
-    for color in [Color::White, Color::Black] {
-        let opp = color.other();
-        for sq in board.by_color(color) & !board.by_role(Role::King) {
-            let attackers = board.attacks_to(sq, opp, occupied).count();
-            let defenders = board.attacks_to(sq, color, occupied).count();
-            if attackers > 0 && defenders == 0 {
-                if let Some(piece) = board_to_piece_ref(board, sq) {
-                    results.push(HangingPiece { piece, attacker_count: attackers as u8 });
-                }
             }
         }
     }
@@ -1800,7 +1745,7 @@ fn extract_development_info(board: &shakmaty::Board) -> Vec<DevelopmentInfo> {
     results
 }
 
-fn tactical_score(board: &shakmaty::Board, us: Color, phase: u8) -> (GroupValue, TacticalReport) {
+fn tactical_score(board: &shakmaty::Board, us: Color, phase: u8) -> GroupValue {
     let them = us.other();
     let (pins_us, pin_ex_us) = detect_pins(board, us);
     let (pins_them, pin_ex_them) = detect_pins(board, them);
@@ -1977,31 +1922,7 @@ fn tactical_score(board: &shakmaty::Board, us: Color, phase: u8) -> (GroupValue,
         }
     }
 
-    let report = TacticalReport {
-        forks: {
-            let mut v = forks_to_typed(board, &fork_ex_us);
-            v.extend(forks_to_typed(board, &fork_ex_them));
-            v
-        },
-        pins: {
-            let mut v = pins_to_typed(board, &pin_ex_us);
-            v.extend(pins_to_typed(board, &pin_ex_them));
-            v
-        },
-        skewers: {
-            let mut v = skewers_to_typed(board, &skewer_ex_us);
-            v.extend(skewers_to_typed(board, &skewer_ex_them));
-            v
-        },
-        discovered: {
-            let mut v = discovered_to_typed(board, &disc_ex_us);
-            v.extend(discovered_to_typed(board, &disc_ex_them));
-            v
-        },
-        hanging: Vec::new(), // TODO: hanging piece detection
-    };
-
-    (GroupValue { mg, eg, blended, terms }, report)
+    GroupValue { mg, eg, blended, terms } 
 }
 
 fn detect_outposts(board: &shakmaty::Board, color: Color) -> (i64, Vec<(Square, Role, Square)>) {
@@ -2630,7 +2551,7 @@ pub fn compute_groups(chess: &Chess, phase: u8, legal_move_count: usize) -> Eval
 
     let vector_features = vector_features_score(board, us, biased_phase(phase, w.phase_bias_vector_features));
     let strategic = strategic_score(board, us, legal_move_count, biased_phase(phase, w.phase_bias_strategic));
-    let (tactical, _tactical_report) = tactical_score(board, us, phase);
+    let tactical = tactical_score(board, us, phase);
 
     let scaling_factor = win_chance_scale(board, &material);
 
@@ -2715,22 +2636,13 @@ pub fn build_sensor_report(board: &shakmaty::Board, fen: &str, groups: &EvalGrou
     // Exchange chains from the graph
     let exchanges: Vec<ExchangeChain> = Vec::new(); // populated per-capture in a follow-up
 
-    // Legacy detectors still needed for scoring and backward compat
-    let (_, fork_ex_us) = detect_forks(board, us);
-    let (_, fork_ex_them) = detect_forks(board, them);
-    let (_, pin_ex_us) = detect_pins(board, us);
-    let (_, pin_ex_them) = detect_pins(board, them);
-    let (_, skewer_ex_us) = detect_skewers(board, us);
-    let (_, skewer_ex_them) = detect_skewers(board, them);
-    let (_, disc_ex_us) = detect_discovered(board, us);
-    let (_, disc_ex_them) = detect_discovered(board, them);
-
+    // Tactical report from the threat graph
     let tactical = TacticalReport {
-        forks: { let mut v = forks_to_typed(board, &fork_ex_us); v.extend(forks_to_typed(board, &fork_ex_them)); v },
-        pins: { let mut v = pins_to_typed(board, &pin_ex_us); v.extend(pins_to_typed(board, &pin_ex_them)); v },
-        skewers: { let mut v = skewers_to_typed(board, &skewer_ex_us); v.extend(skewers_to_typed(board, &skewer_ex_them)); v },
-        discovered: { let mut v = discovered_to_typed(board, &disc_ex_us); v.extend(discovered_to_typed(board, &disc_ex_them)); v },
-        hanging: extract_hanging_pieces(board),
+        forks: Vec::new(),         // replaced by evaluated_forks
+        pins: Vec::new(),          // TODO: ThreatGraph pin detection
+        skewers: Vec::new(),       // TODO: ThreatGraph skewer detection
+        discovered: Vec::new(),    // TODO: ThreatGraph discovered detection
+        hanging: graph.find_hanging(),
     };
 
     let positional = PositionalReport {
