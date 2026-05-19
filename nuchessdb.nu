@@ -487,6 +487,10 @@ def main [--limit: int, ...args] {
             let perspective = if ($rest | length) > 1 { $rest.1 } else { "white" }
             coach-review-game $id --perspective $perspective
         }
+        "coach-profile" => {
+            if ($rest | is-empty) { print "Provide username"; return }
+            nu coach-profile.nu $rest.0 --db ./chess.db
+        }
         "recent" => {
             let limit = if ($rest | is-empty) { 5 } else { ($rest.0 | into int) }
             let db = (_db_path)
@@ -530,6 +534,7 @@ COMMANDS:
   explore <zobrist>        Show move frequencies and ELO performance for a position
   review <game_id>         Show move-by-move engine evaluations for a specific game
   coach-review <game_id> [perspective]  AI coaching with anomaly detection (default: white)
+  coach-profile <username>            Show what concepts you consistently miss
   derive-coach <username>             Compute per-player baselines and anomaly alerts (standalone)
   dictionary-update <username> [--limit N]  Update Tier 1000 blunder sensor Welford states
   validate-gate <username> <game_id>    Anomaly intercept gate (3-line JSON output)

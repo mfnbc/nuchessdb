@@ -90,6 +90,7 @@ All commands are run via: `nu nuchessdb.nu <command> [args]`
 | `review <game_id>` | Show move-by-move HUGM evaluations for a game | ✅ |
 | `status` | Database counts (games, positions, moves) | ✅ |
 | `coach-review <game_id> [perspective]` | LLM-powered Socratic coaching with anomaly detection | ✅ |
+| `coach-profile <username>` | Show what concepts you consistently miss (frequency × severity) | ✅ |
 | `derive-coach <username>` | DERIVE phase: batch baselines, anomalies, transitions via Rust plugin | ✅ |
 | `dictionary-update <username> [--limit N]` | Incremental Tier-1000 Welford update from gated_issues | ✅ |
 | `validate-gate <username> <game_id>` | Anomaly intercept gate — 3-line JSON shutdown block | ✅ |

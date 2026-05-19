@@ -45,7 +45,7 @@ def main [username: string, --db: string, --min-games: int = 10] {
     # Insert baselines — Welford states (mean, m2, count) per concept per phase
     if ($signals.baselines | length) > 0 {
         $signals.baselines
-        | rename username concept_name phase_bucket mean std
+        | rename username phase_bucket concept_name mean std
         | insert m2 {|r| $r.std * $r.std}
         | insert count { 1 }
         | insert last_updated { (date now | format date "%Y-%m-%dT%H:%M:%SZ") }
