@@ -11,7 +11,7 @@
 def _db_path [] { "./chess.db" }
 
 # Tier 1000 blunder sensor concept names (Survival + Threat tiers)
-const TIER_1000_CONCEPTS = ["fork", "fork_capitalized", "fork_victimized", "pin", "skewer", "discovered_attack", "hanging_piece", "material_imbalance", "king_in_check"]
+const TIER_1000_CONCEPTS = ["fork", "fork_accuracy", "fork_miss_cp", "pin", "skewer", "discovered_attack", "hanging_piece", "material_imbalance", "king_in_check"]
 
 def main [username: string, --db: string, --limit: int = 100] {
     let db = if ($db != null) { $db } else { (_db_path) }
@@ -25,7 +25,7 @@ def main [username: string, --db: string, --limit: int = 100] {
     let existing = (open $db | query db "
         SELECT concept_name, phase_bucket, mean, m2, count
         FROM player_baselines
-        WHERE username = ? AND concept_name IN ('fork','fork_capitalized','fork_victimized','pin','skewer','discovered_attack','hanging_piece','material_imbalance','king_in_check')
+        WHERE username = ? AND concept_name IN ('fork','fork_accuracy','fork_miss_cp','pin','skewer','discovered_attack','hanging_piece','material_imbalance','king_in_check')
     " --params [$username])
 
     let existing_map = if ($existing | is-empty) {
@@ -55,12 +55,14 @@ def main [username: string, --db: string, --limit: int = 100] {
                CASE WHEN m.color = 'white' THEN g.white ELSE g.black END as player,
                m.color as player_color,
                n.uci as next_uci, n.san as next_san, n.color as next_color,
-               nn.san as next2_san
+               nn.uci as next2_uci, nn.san as next2_san, nn.color as next2_color,
+               nnn.uci as next3_uci, nnn.san as next3_san
         FROM moves m
         JOIN positions p ON m.next_position_id = p.zobrist
         JOIN games g ON m.game_id = g.game_id
         LEFT JOIN moves n ON m.game_id = n.game_id AND m.ply + 1 = n.ply
         LEFT JOIN moves nn ON m.game_id = nn.game_id AND m.ply + 2 = nn.ply
+        LEFT JOIN moves nnn ON m.game_id = nnn.game_id AND m.ply + 3 = nnn.ply
         WHERE (g.white = ? OR g.black = ?)
           AND NOT EXISTS (
               SELECT 1 FROM dict_update_marker dum
@@ -95,22 +97,56 @@ def main [username: string, --db: string, --limit: int = 100] {
                 else { 3 }
             )
 
-            # Extract next-move destination from UCI (e2e4 → e4)
+            # Extract next-move destinations
             let next_dest = if ($row.next_uci | is-not-empty) {
                 ($row.next_uci | str substring 2..4)
+            } else { "" }
+            let next2_dest = if ($row.next2_uci | is-not-empty) {
+                ($row.next2_uci | str substring 2..4)
             } else { "" }
 
             mut concepts = []
 
-            # Forks — from ThreatGraph with SEE consequence
+            # Forks — accuracy vs SEE optimal collapse
             for f in ($report.evaluated_forks | default []) {
                 $concepts = ($concepts | append { name: "fork", severity: 240 })
-                if ($f.hangs | is-not-empty) and ($next_dest | is-not-empty) {
-                    if $next_dest == $f.hangs.square {
-                        if $row.next_color == $f.attacker.color {
-                            $concepts = ($concepts | append { name: "fork_capitalized", severity: 240 })
+
+                if ($f.hangs | is-not-empty) and ($f.chain | length) > 0 {
+                    let see_cp = ($f.see_cp | into float)
+                    let chain = $f.chain
+                    let init_dest = ($chain | first).square
+                    let initiated = ($next_dest | is-not-empty) and $next_dest == $init_dest
+                    let total_steps = ($chain | length) - 1  # steps after victim identification
+
+                    # Count how many chain steps the player matched
+                    let actual_dests = [$next_dest, $next2_dest, $next3_dest]
+                    let mut steps_done = 0
+                    for i in 1..<($chain | length) {
+                        let step = ($chain | get $i)
+                        let d = ($actual_dests | get ($i - 1))
+                        if ($d | is-not-empty) and $d == $step.square
+                            { $steps_done = $steps_done + 1 } else { break }
+                    }
+
+                    if $see_cp > 0.0 {
+                        # Winning exchange — optimal is to enter and follow through
+                        if $initiated {
+                            let acc = (($steps_done | into float) / ($total_steps | into float) * 100.0 | math round --precision 0)
+                            $concepts = ($concepts | append { name: "fork_accuracy", severity: ($acc | into int) })
+                            if $steps_done < $total_steps {
+                                $concepts = ($concepts | append { name: "fork_miss_cp", severity: ($see_cp | math round --precision 0 | into int) })
+                            }
                         } else {
-                            $concepts = ($concepts | append { name: "fork_victimized", severity: 240 })
+                            $concepts = ($concepts | append { name: "fork_miss_cp", severity: ($see_cp | math round --precision 0 | into int) })
+                        }
+                    } else if $see_cp < 0.0 {
+                        # Losing exchange — optimal is to AVOID
+                        if $initiated {
+                            let loss = ($see_cp | math abs | math round --precision 0 | into int)
+                            $concepts = ($concepts | append { name: "fork_accuracy", severity: 0 })
+                            $concepts = ($concepts | append { name: "fork_miss_cp", severity: $loss })
+                        } else {
+                            $concepts = ($concepts | append { name: "fork_accuracy", severity: 100 })
                         }
                     }
                 }

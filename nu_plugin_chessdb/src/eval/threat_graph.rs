@@ -80,48 +80,68 @@ impl ThreatGraph {
         }
     }
 
-    /// Run SEE: given a square where a capture happens (initiator captures
-    /// the piece on this square), simulate the optimal recapture chain.
-    /// Each side captures with their lowest-value piece. Returns net
-    /// centipawns gained by the initiator.
-    pub fn see(&self, sq: Square, initiator: Color) -> i64 {
-        // Initial capture value: the piece currently on the target square
+    /// Run SEE: given a square where a capture happens, return the optimal
+    /// recapture chain AND net centipawns. Each step records who captured what.
+    pub fn see_chain(&self, sq: Square, initiator: Color) -> (Vec<CaptureStep>, i64) {
+        let mut steps = Vec::new();
         let target_piece_val = self.pieces[Self::idx(sq)]
             .map(|p| Self::piece_value(p.role)).unwrap_or(0);
-        let mut gain = target_piece_val; // initiator gains this immediately
+        let mut net = target_piece_val;
+
+        // Record the piece being captured (belongs to opponent of initiator)
+        let victim_color = if initiator.is_white() { "black" } else { "white" };
+        let victim_role = self.pieces[Self::idx(sq)]
+            .map(|p| role_name(p.role)).unwrap_or_default();
+        steps.push(CaptureStep {
+            piece: victim_role,
+            color: victim_color.into(),
+            square: square_name(sq),
+            value_cp: target_piece_val,
+        });
 
         let mut att_sq = sq;
-        let mut side_to_capture = initiator.other(); // opponent recaptures first
+        let mut side_to_capture = initiator.other();
 
         loop {
             let attackers = self.attackers_to[Self::idx(att_sq)]
                 & self.board.by_color(side_to_capture);
             if attackers == Bitboard::EMPTY { break; }
 
-            // Find lowest-value attacker
             let mut best_sq = None;
             let mut best_val = i64::MAX;
+            let mut best_role = Role::Pawn;
             for role in [Role::Pawn, Role::Knight, Role::Bishop, Role::Rook, Role::Queen, Role::King] {
                 let role_bb = attackers & self.board.by_role(role);
                 if let Some(sq) = role_bb.into_iter().next() {
                     let val = Self::piece_value(role);
                     if val < best_val {
-                        best_val = val;
-                        best_sq = Some(sq);
+                        best_val = val; best_sq = Some(sq); best_role = role;
                     }
-                    break; // take first in this role (lowest-value role)
+                    break;
                 }
             }
             match best_sq {
                 Some(sq) => {
-                    gain += best_val * if side_to_capture == initiator { 1 } else { -1 };
+                    let delta = best_val * if side_to_capture == initiator { 1 } else { -1 };
+                    net += delta;
+                    steps.push(CaptureStep {
+                        piece: role_name(best_role),
+                        color: if side_to_capture.is_white() { "white" } else { "black" }.into(),
+                        square: square_name(sq),
+                        value_cp: best_val,
+                    });
                     att_sq = sq;
                     side_to_capture = side_to_capture.other();
                 }
                 None => break,
             }
         }
-        gain
+        (steps, net)
+    }
+
+    /// Convenience: SEE net score only.
+    pub fn see(&self, sq: Square, initiator: Color) -> i64 {
+        self.see_chain(sq, initiator).1
     }
 
     /// Find all forks: a piece attacks ≥2 enemy pieces.
@@ -154,13 +174,13 @@ impl ThreatGraph {
                 };
                 // Find which target hangs (lowest-value undefended)
                 let hangs = self.undefended_target(&targets, enemy);
-                // SEE: what's the net if attacker takes the hanging piece?
-                let see_gain = if let Some(ref h) = hangs {
+                // SEE: optimal recapture chain + net score
+                let (chain, see_gain) = if let Some(ref h) = hangs {
                     let h_sq = match shakmaty::Square::from_ascii(h.square.as_bytes()) {
                         Ok(sq) => sq, Err(_) => continue,
                     };
-                    self.see(h_sq, color) as i64
-                } else { 0 };
+                    self.see_chain(h_sq, color)
+                } else { (Vec::new(), 0) };
                 let consequence = if see_gain > 150 { Consequence::Winning }
                     else if see_gain > 0 { Consequence::Minor }
                     else if see_gain < -50 { Consequence::Losing }
@@ -172,6 +192,7 @@ impl ThreatGraph {
                     hangs,
                     see_cp: see_gain,
                     consequence,
+                    chain,
                 });
             }
         }
@@ -295,6 +316,9 @@ pub struct EvaluatedFork {
     pub hangs: Option<PieceRef>,
     pub see_cp: i64,
     pub consequence: Consequence,
+    /// Optimal SEE recapture chain (for step-by-step comparison)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chain: Vec<CaptureStep>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
