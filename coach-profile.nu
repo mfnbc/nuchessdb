@@ -1,56 +1,129 @@
 #!/usr/bin/env nu
 
-# coach-profile.nu — COACH phase: player concept profile
+# coach-profile.nu — player collapse & concept profile
 #
-# Reads player_baselines and move_anomalies to show what a player
-# consistently misses — ranked by frequency × severity.
+# Two modes:
+#   Terminal (default): pretty bar-chart display
+#   JSON (--json): structured output for nu-agent coach consumption
 #
-# Two layers:
-#   1. Phase-level eval swing profile (hugm_delta per phase_bucket)
-#   2. Concept-level patterns (fork, pin, hanging_piece, etc.)
-#
-# Usage: nu coach-profile.nu <username> [--db <path>]
+# Usage: nu coach-profile.nu <username> [--db <path>] [--json] [--examples N]
 
 def _db_path [] { "./chess.db" }
 
-def main [username: string, --db: string] {
+def main [username: string, --db: string, --json, --examples: int = 3] {
     let db = if ($db != null) { $db } else { (_db_path) }
 
     if not ($db | path exists) {
-        print $"Database ($db) not found."
+        if $json { print ({ error: "database not found" } | to json -r) } else { print $"Database ($db) not found." }
         return
     }
 
-    # ── 1. Phase-level eval swing profile ──
+    # ── Shared queries ──
     let phase_baselines = (open $db | query db "
         SELECT phase_bucket, mean, m2, count
-        FROM player_baselines
-        WHERE username = ? AND concept_name = 'hugm_delta'
+        FROM player_baselines WHERE username = ? AND concept_name = 'hugm_delta'
         ORDER BY phase_bucket
     " --params [$username])
 
-    # ── 2. Concept-level patterns ──
     let concept_baselines = (open $db | query db "
         SELECT concept_name, phase_bucket, mean, m2, count
-        FROM player_baselines
-        WHERE username = ? AND concept_name != 'hugm_delta'
+        FROM player_baselines WHERE username = ? AND concept_name != 'hugm_delta'
         ORDER BY concept_name, phase_bucket
     " --params [$username])
 
-    # ── 3. Recent anomaly count ──
     let anomaly_count = (open $db | query db "
         SELECT COUNT(*) as cnt FROM move_anomalies
         WHERE username = ? AND consumed = 0
     " --params [$username] | first | get cnt)
 
-    # ── 4. Game count ──
     let game_count = (open $db | query db "
         SELECT COUNT(DISTINCT m.game_id) as cnt
-        FROM moves m
-        JOIN games g ON m.game_id = g.game_id
+        FROM moves m JOIN games g ON m.game_id = g.game_id
         WHERE g.white = ? OR g.black = ?
     " --params [$username, $username] | first | get cnt)
 
+    # ── Aggregate phase profile ──
+    let phase_profile = if ($phase_baselines | is-not-empty) {
+        $phase_baselines | reduce -f {} {|row, acc|
+            let name = match ($row.phase_bucket | into int) {
+                0 => "endgame", 1 => "late_mid", 2 => "midgame", _ => "opening"
+            }
+            let sd = if $row.count > 1 {
+                let v = ($row.m2 | into float) / (($row.count - 1) | into float)
+                if $v > 0.0 { $v | math sqrt | math round --precision 0 } else { 0.0 }
+            } else { 0.0 }
+            $acc | insert $name { mean_cp: ($row.mean | math round --precision 0), std_cp: $sd }
+        }
+    } else { {} }
+
+    # ── Aggregate concepts ──
+    let concept_aggregates = if ($concept_baselines | is-not-empty) {
+        $concept_baselines
+        | group-by concept_name
+        | items {|name, rows|
+            let total = ($rows | get count | math sum)
+            let wsum = ($rows | each {|r| ($r.mean | into float) * ($r.count | into float) } | math sum)
+            let avg = if $total > 0 { ($wsum / ($total | into float) | math round --precision 0) } else { 0.0 }
+            { concept: $name, occurrences: $total, avg_severity: $avg, total_cost: ($avg * ($total | into float)) }
+        }
+        | sort-by total_cost --reverse
+    } else { [] }
+
+    # ── Anomalies ──
+    let anomalies = if $anomaly_count > 0 {
+        (open $db | query db "
+            SELECT game_id, ply, ROUND(MAX(z_score),2) as z, ROUND(MAX(severity),0) as sev
+            FROM move_anomalies WHERE username = ? AND consumed = 0
+            GROUP BY game_id, ply ORDER BY sev DESC LIMIT 5
+        " --params [$username])
+    } else { [] }
+
+    # ── Example positions for top concepts ──
+    let concept_examples = if ($examples > 0) and ($concept_aggregates | length) > 0 {
+        # Get the top-N concept names
+        let top_concepts = ($concept_aggregates | first 3 | get concept)
+
+        $top_concepts | reduce -f {} {|cname, acc|
+            # Find positions for this specific concept
+            let positions = (open $db | query db "
+                SELECT ma.game_id, ma.ply, ma.z_score, ma.severity, p.fen, p.hugm_score
+                FROM move_anomalies ma
+                JOIN moves m ON ma.game_id = m.game_id AND ma.ply = m.ply
+                JOIN positions p ON m.next_position_id = p.zobrist
+                WHERE ma.username = ?1 AND ma.consumed = 0 AND ma.concept_name = ?2
+                ORDER BY ABS(ma.severity) DESC LIMIT ?3
+            " --params [$username, $cname, $examples])
+
+            $acc | insert $cname ($positions | each {|p| {
+                game_id: $p.game_id,
+                ply: $p.ply,
+                z_score: ($p.z_score | math round --precision 2),
+                severity_cp: $p.severity,
+                fen: $p.fen,
+                hugm_score: $p.hugm_score,
+            }})
+        }
+    } else { {} }
+
+    # ── Output ──
+    if $json {
+        let profile = {
+            player: $username
+            games: $game_count
+            unreviewed_anomalies: $anomaly_count
+            phase_profile: $phase_profile
+            concepts: ($concept_aggregates)
+            anomalies: ($anomalies | each {|a| {
+                game_id: ($a.game_id | into string), ply: $a.ply,
+                z_score: $a.z, severity_cp: $a.sev
+            }})
+            concept_examples: $concept_examples
+        }
+        print ($profile | to json -r)
+        return
+    }
+
+    # ── Terminal display ──
     print $"(ansi green)╔══════════════════════════════════════╗"
     print $"(ansi green)║  Coach Profile: ($username | fill -w 21 -a l)║"
     print $"(ansi green)╚══════════════════════════════════════╝(ansi reset)"
@@ -58,74 +131,31 @@ def main [username: string, --db: string] {
     print $"  Unreviewed anomalies: ($anomaly_count)"
     print ""
 
-    # ── Phase summary ──
     if ($phase_baselines | is-not-empty) {
         print $"(ansi green_bold)Eval swing by phase(ansi reset)"
         print ""
-
-        mut total_cost = 0.0
-        mut total_count = 0.0
-
+        mut tc = 0.0; mut tn = 0.0
         for row in $phase_baselines {
-            let phase_name = match ($row.phase_bucket | into int) {
-                0 => "Endgame   "
-                1 => "Late mid  "
-                2 => "Midgame   "
-                _ => "Opening   "
+            let name = match ($row.phase_bucket | into int) {
+                0 => "Endgame   ", 1 => "Late mid  ", 2 => "Midgame   ", _ => "Opening   "
             }
-            let sd = if $row.count > 1 {
-                let v = ($row.m2 | into float) / (($row.count - 1) | into float)
-                if $v > 0.0 { $v | math sqrt | math round --precision 0 } else { 0.0 }
-            } else { 0.0 }
             let mean = ($row.mean | math round --precision 0)
-            let bar_len = if $mean > 0 { (($mean / 20.0) | into int | if $in > 30 { 30 } else { $in }) } else { 0 }
-            let bar = if $bar_len > 0 { (0..$bar_len | each { "█" } | str join) } else { "" }
-            print $"  ($phase_name) μ=($mean | fill -w 5 -a l)cp  ($bar)"
-            $total_cost = $total_cost + ($row.mean | into float) * ($row.count | into float)
-            $total_count = $total_count + ($row.count | into float)
+            let blen = if ($mean / 20.0 | into int) > 30 { 30 } else { ($mean / 20.0 | into int) }
+            let bar = if $blen > 0 { (0..<$blen | each { "█" } | str join) } else { "" }
+            print $"  ($name) μ=($mean | fill -w 5 -a l)cp  ($bar)"
+            $tc = $tc + ($row.mean | into float) * ($row.count | into float)
+            $tn = $tn + ($row.count | into float)
         }
-
-        if $total_count > 0.0 {
-            let avg = ($total_cost / $total_count | math round --precision 0)
-            print ""
-            print $"  Average eval swing: ($avg)cp per move"
-        }
+        if $tn > 0.0 { print ""; print $"  Average eval swing: (($tc / $tn | math round --precision 0))cp per move" }
     }
 
-    # ── Concept patterns ──
     if ($concept_baselines | is-not-empty) {
-        print ""
-        print $"(ansi green_bold)Concepts you encounter(ansi reset)"
-        print ""
-
-        # Aggregate across phase buckets
-        let aggregated = ($concept_baselines
-            | group-by concept_name
-            | items {|name, rows|
-                let total_count = ($rows | get count | math sum)
-                let weighted_sum = ($rows | each {|r| ($r.mean | into float) * ($r.count | into float) } | math sum)
-                let avg_severity = if $total_count > 0 { ($weighted_sum / ($total_count | into float) | math round --precision 0) } else { 0.0 }
-                let total_cost = $avg_severity * ($total_count | into float)
-                {
-                    concept: $name
-                    occurrences: $total_count
-                    avg_severity: $avg_severity
-                    total_cost: $total_cost
-                }
-            }
-            | sort-by total_cost --reverse
-        )
-
-        for row in $aggregated {
-            let concept_label = match $row.concept {
+        print ""; print $"(ansi green_bold)Concepts you encounter(ansi reset)"; print ""
+        for row in $concept_aggregates {
+            let label = match $row.concept {
                 "collapse" => "Collapse (exchange)     "
                 "collapse_accuracy" => "  ↳ chain accuracy %     "
                 "collapse_miss_cp" => "  ↳ avg cp left on table "
-                "fork" => "Fork (raw detection)    "
-                "fork_accuracy" => "  ↳ — use collapse above "
-                "fork_miss_cp" => "  ↳ — use collapse above "
-                "fork_capitalized" => "  ↳ — migrated to collapse"
-                "fork_victimized" => "  ↳ — migrated to collapse"
                 "pin" => "Pin (pinned piece)       "
                 "skewer" => "Skewer (x-ray attack)   "
                 "discovered_attack" => "Discovered attack      "
@@ -134,41 +164,27 @@ def main [username: string, --db: string] {
                 "king_in_check" => "King in check          "
                 _ => $"($row.concept | fill -w 24 -a l)"
             }
-            let bar_len = if $row.occurrences > 0 { (($row.occurrences | into int) | if $in > 40 { 40 } else { $in }) } else { 0 }
-            let bar = if $bar_len > 0 { (0..$bar_len | each { "░" } | str join) } else { "" }
-            let cost_str = if $row.avg_severity > 0 {
-                if ($row.concept == "collapse_accuracy") { $"avg ($row.avg_severity)%" }
-                else if ($row.concept == "collapse_miss_cp") { $"avg ($row.avg_severity)cp missed" }
-                else { $"~($row.avg_severity)cp each" }
+            let blen = if ($row.occurrences | into int) > 40 { 40 } else { ($row.occurrences | into int) }
+            let bar = if $blen > 0 { (0..<$blen | each { "░" } | str join) } else { "" }
+            let cost = if $row.avg_severity > 0 {
+                match $row.concept {
+                    "collapse_accuracy" => $"avg ($row.avg_severity)%"
+                    "collapse_miss_cp" => $"avg ($row.avg_severity)cp missed"
+                    _ => $"~($row.avg_severity)cp each"
+                }
             } else { "tracking" }
-            print $"  ($concept_label) ($row.occurrences | fill -w 4 -a l)×   ($cost_str | fill -w 14 -a l)($bar)"
+            print $"  ($label) ($row.occurrences | fill -w 4 -a l)×   ($cost | fill -w 14 -a l)($bar)"
         }
     } else {
-        print ""
-        print $"(ansi yellow)No concept-level data yet.(ansi reset)"
+        print ""; print $"(ansi yellow)No concept-level data yet.(ansi reset)"
         print $"  Run: nu nuchessdb.nu dictionary-update ($username)"
-        print $"  This evaluates each of your positions for forks, pins,"
-        print $"  hanging pieces, and other tactical patterns."
     }
 
-    # ── Anomaly summary ──
-    if $anomaly_count > 0 {
-        print ""
-        print $"(ansi green_bold)Recent anomalies(ansi reset)"
-        let recent = (open $db | query db "
-            SELECT game_id, ply, ROUND(MAX(z_score), 2) as z, ROUND(MAX(severity), 0) as sev
-            FROM move_anomalies
-            WHERE username = ? AND consumed = 0
-            GROUP BY game_id, ply
-            ORDER BY sev DESC LIMIT 5
-        " --params [$username])
-
-        for row in $recent {
+    if ($anomalies | length) > 0 {
+        print ""; print $"(ansi green_bold)Recent anomalies(ansi reset)"
+        for row in ($anomalies | first 5) {
             print $"  Ply ($row.ply | fill -w 3 -a l) z=($row.z | fill -w 5 -a l) ($row.sev)cp  game ($row.game_id)"
         }
-        let last = ($recent | first)
-        print $"  Run: nu nuchessdb.nu coach-review ($last.game_id) white"
     }
-
     print ""
 }
