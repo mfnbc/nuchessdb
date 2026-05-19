@@ -10,8 +10,8 @@
 
 def _db_path [] { "./chess.db" }
 
-# Tier 1000 blunder sensor concept names
-const TIER_1000_CONCEPTS = ["fork", "pin", "skewer", "discovered_attack", "hanging_piece"]
+# Tier 1000 blunder sensor concept names (Survival + Threat tiers)
+const TIER_1000_CONCEPTS = ["fork", "pin", "skewer", "discovered_attack", "hanging_piece", "material_imbalance", "king_in_check"]
 
 def main [username: string, --db: string, --limit: int = 100] {
     let db = if ($db != null) { $db } else { (_db_path) }
@@ -25,7 +25,7 @@ def main [username: string, --db: string, --limit: int = 100] {
     let existing = (open $db | query db "
         SELECT concept_name, phase_bucket, mean, m2, count
         FROM player_baselines
-        WHERE username = ? AND concept_name IN ('fork','pin','skewer','discovered_attack','hanging_piece')
+        WHERE username = ? AND concept_name IN ('fork','pin','skewer','discovered_attack','hanging_piece','material_imbalance','king_in_check')
     " --params [$username])
 
     let existing_map = if ($existing | is-empty) {

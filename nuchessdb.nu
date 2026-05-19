@@ -259,13 +259,7 @@ def import-records [games: list, platform: string, username: string] {
         }
 }
 
-# --- 3. Analytics & Intelligence ---
-def analyze-position [fen: string, weights_path: string = "./weights.json"] {
-    # Calls the resurrected Rust engine modules
-    let hugm = ($fen | chessdb hugm-eval)
-    let nnue = ($fen | chessdb nnue-eval)
-    { hugm: $hugm, nnue: $nnue }
-}
+# (analyze-position removed — dead code; use 'nuchessdb.nu review <id>' or 'chessdb hugm-eval' directly)
 
 def report-moves [zobrist: string] {
     let db = (_db_path)
@@ -509,12 +503,12 @@ def main [--limit: int, ...args] {
         }
         "dictionary-update" => {
             if ($rest | is-empty) { print "Provide username"; return }
-            nu dictionary-update.nu $rest.0
+            nu dictionary-update.nu $rest.0 --db ./chess.db
         }
         "validate-gate" => {
             if ($rest | is-empty) { print "Provide username and game_id"; return }
             let game_id = ($rest.1 | into int)
-            nu validate-gate.nu $rest.0 $game_id
+            nu validate-gate.nu $rest.0 $game_id --db ./chess.db
         }
         "status" => {
             let db = (_db_path)
@@ -530,7 +524,8 @@ def print-help [] {
 
 COMMANDS:
   init                     Initialize relational analytics engine
-  sync <user> [--limit N]     Stream games from chess.com (--limit N for last N archives)
+  --limit N                 Process only last N archives (use before subcommand, e.g. --limit 3 sync <user>)
+  sync <user>              Stream games from chess.com
   recent [n]               List the n most recent games and their IDs (default 5)
   explore <zobrist>        Show move frequencies and ELO performance for a position
   review <game_id>         Show move-by-move engine evaluations for a specific game

@@ -83,6 +83,7 @@ All commands are run via: `nu nuchessdb.nu <command> [args]`
 | Command | Description | Status |
 |---|---|---|
 | `init` | Initialize database and schema | ✅ |
+| `--limit N` | Process only last N archives (main-level flag, before subcommand) | ✅ |
 | `sync <username>` | Download and import games from chess.com | ✅ |
 | `recent [n]` | List the n most recent games (default 5) | ✅ |
 | `explore <zobrist>` | Show move frequencies and ELO performance for a position | ✅ |

@@ -21,49 +21,6 @@ def main [username: string, --db: string, --min-games: int = 10] {
         return
     }
 
-    # Ensure coaching tables exist
-    open $db | query db "
-        CREATE TABLE IF NOT EXISTS player_baselines (
-            username TEXT NOT NULL,
-            concept_name TEXT NOT NULL,
-            phase_bucket INTEGER NOT NULL,
-            mean REAL NOT NULL DEFAULT 0,
-            m2 REAL NOT NULL DEFAULT 0,
-            count INTEGER NOT NULL DEFAULT 0,
-            last_updated TEXT,
-            PRIMARY KEY (username, concept_name, phase_bucket)
-        );
-    " | ignore
-
-    open $db | query db "
-        CREATE TABLE IF NOT EXISTS move_anomalies (
-            alert_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL,
-            game_id INTEGER NOT NULL,
-            ply INTEGER NOT NULL,
-            state_id INTEGER NOT NULL,
-            anomaly_type TEXT NOT NULL,
-            concept_name TEXT,
-            z_score REAL,
-            transition_risk REAL,
-            severity REAL NOT NULL DEFAULT 0,
-            created_at TEXT DEFAULT (datetime('now')),
-            consumed BOOLEAN NOT NULL DEFAULT 0
-        );
-    " | ignore
-
-    open $db | query db "
-        CREATE TABLE IF NOT EXISTS transition_events (
-            username TEXT NOT NULL,
-            state_from INTEGER NOT NULL,
-            state_to INTEGER NOT NULL,
-            total_count INTEGER NOT NULL DEFAULT 0,
-            blunder_count INTEGER NOT NULL DEFAULT 0,
-            last_updated TEXT,
-            PRIMARY KEY (username, state_from, state_to)
-        );
-    " | ignore
-
     # Query all moves for this player with FEN and score
     let rows = (open $db | query db "
         SELECT m.game_id, m.ply, p.fen, p.hugm_score,
