@@ -1,17 +1,20 @@
 #!/usr/bin/env nu
-# dictionary-update.nu — Code Dictionary Update loop
+# dictionary-update.nu — collapse detection and chain accuracy tracking
 #
-# Incrementally updates Welford states (mean, m2, count) for Tier 1000
-# blunder sensors: fork, pin, skewer, discovered_attack, hanging_piece.
-# Reads existing baselines from player_baselines, evaluates new positions
-# via HUGM, merges Welford states, and writes updated states back.
+# For each position, runs HUGM evaluation, extracts tactical concepts,
+# and tracks collapse accuracy: did you see the exchange, maximize it,
+# or correctly avoid a losing exchange?
+#
+# Tracks: collapse, collapse_accuracy (chain step match %),
+# collapse_miss_cp (centipawns left on table)
 #
 # Usage: nu dictionary-update.nu <username> [--db <path>] [--limit <int>]
 
 def _db_path [] { "./chess.db" }
 
 # Tier 1000 blunder sensor concept names (Survival + Threat tiers)
-const TIER_1000_CONCEPTS = ["fork", "fork_accuracy", "fork_miss_cp", "pin", "skewer", "discovered_attack", "hanging_piece", "material_imbalance", "king_in_check"]
+# "collapse" = any tactical exchange or simplification chain (detected via forks)
+const TIER_1000_CONCEPTS = ["collapse", "collapse_accuracy", "collapse_miss_cp", "pin", "skewer", "discovered_attack", "hanging_piece", "material_imbalance", "king_in_check"]
 
 def main [username: string, --db: string, --limit: int = 100] {
     let db = if ($db != null) { $db } else { (_db_path) }
@@ -25,7 +28,7 @@ def main [username: string, --db: string, --limit: int = 100] {
     let existing = (open $db | query db "
         SELECT concept_name, phase_bucket, mean, m2, count
         FROM player_baselines
-        WHERE username = ? AND concept_name IN ('fork','fork_accuracy','fork_miss_cp','pin','skewer','discovered_attack','hanging_piece','material_imbalance','king_in_check')
+        WHERE username = ? AND concept_name IN ('collapse','collapse_accuracy','collapse_miss_cp','pin','skewer','discovered_attack','hanging_piece','material_imbalance','king_in_check')
     " --params [$username])
 
     let existing_map = if ($existing | is-empty) {
@@ -132,21 +135,21 @@ def main [username: string, --db: string, --limit: int = 100] {
                         # Winning exchange — optimal is to enter and follow through
                         if $initiated {
                             let acc = (($steps_done | into float) / ($total_steps | into float) * 100.0 | math round --precision 0)
-                            $concepts = ($concepts | append { name: "fork_accuracy", severity: ($acc | into int) })
+                            $concepts = ($concepts | append { name: "collapse_accuracy", severity: ($acc | into int) })
                             if $steps_done < $total_steps {
-                                $concepts = ($concepts | append { name: "fork_miss_cp", severity: ($see_cp | math round --precision 0 | into int) })
+                                $concepts = ($concepts | append { name: "collapse_miss_cp", severity: ($see_cp | math round --precision 0 | into int) })
                             }
                         } else {
-                            $concepts = ($concepts | append { name: "fork_miss_cp", severity: ($see_cp | math round --precision 0 | into int) })
+                            $concepts = ($concepts | append { name: "collapse_miss_cp", severity: ($see_cp | math round --precision 0 | into int) })
                         }
                     } else if $see_cp < 0.0 {
                         # Losing exchange — optimal is to AVOID
                         if $initiated {
                             let loss = ($see_cp | math abs | math round --precision 0 | into int)
-                            $concepts = ($concepts | append { name: "fork_accuracy", severity: 0 })
-                            $concepts = ($concepts | append { name: "fork_miss_cp", severity: $loss })
+                            $concepts = ($concepts | append { name: "collapse_accuracy", severity: 0 })
+                            $concepts = ($concepts | append { name: "collapse_miss_cp", severity: $loss })
                         } else {
-                            $concepts = ($concepts | append { name: "fork_accuracy", severity: 100 })
+                            $concepts = ($concepts | append { name: "collapse_accuracy", severity: 100 })
                         }
                     }
                 }

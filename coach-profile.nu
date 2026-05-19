@@ -118,11 +118,14 @@ def main [username: string, --db: string] {
 
         for row in $aggregated {
             let concept_label = match $row.concept {
-                "fork" => "Fork (detected)          "
-                "fork_accuracy" => "  ↳ calc accuracy        "
-                "fork_miss_cp" => "  ↳ avg cp left on table "
-                "fork_capitalized" => "  ↳ you exploited it     "
-                "fork_victimized" => "  ↳ played against you   "
+                "collapse" => "Collapse (exchange)     "
+                "collapse_accuracy" => "  ↳ chain accuracy %     "
+                "collapse_miss_cp" => "  ↳ avg cp left on table "
+                "fork" => "Fork (raw detection)    "
+                "fork_accuracy" => "  ↳ — use collapse above "
+                "fork_miss_cp" => "  ↳ — use collapse above "
+                "fork_capitalized" => "  ↳ — migrated to collapse"
+                "fork_victimized" => "  ↳ — migrated to collapse"
                 "pin" => "Pin (pinned piece)       "
                 "skewer" => "Skewer (x-ray attack)   "
                 "discovered_attack" => "Discovered attack      "
@@ -134,8 +137,8 @@ def main [username: string, --db: string] {
             let bar_len = if $row.occurrences > 0 { (($row.occurrences | into int) | if $in > 40 { 40 } else { $in }) } else { 0 }
             let bar = if $bar_len > 0 { (0..$bar_len | each { "░" } | str join) } else { "" }
             let cost_str = if $row.avg_severity > 0 {
-                if ($row.concept == "fork_accuracy") { $"avg ($row.avg_severity)%" }
-                else if ($row.concept == "fork_miss_cp") { $"avg ($row.avg_severity)cp" }
+                if ($row.concept == "collapse_accuracy") { $"avg ($row.avg_severity)%" }
+                else if ($row.concept == "collapse_miss_cp") { $"avg ($row.avg_severity)cp missed" }
                 else { $"~($row.avg_severity)cp each" }
             } else { "tracking" }
             print $"  ($concept_label) ($row.occurrences | fill -w 4 -a l)×   ($cost_str | fill -w 14 -a l)($bar)"
