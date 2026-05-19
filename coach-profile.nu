@@ -118,7 +118,9 @@ def main [username: string, --db: string] {
 
         for row in $aggregated {
             let concept_label = match $row.concept {
-                "fork" => "Fork (double attack)     "
+                "fork" => "Fork (detected)          "
+                "fork_capitalized" => "  ↳ you exploited it     "
+                "fork_victimized" => "  ↳ played against you   "
                 "pin" => "Pin (pinned piece)       "
                 "skewer" => "Skewer (x-ray attack)   "
                 "discovered_attack" => "Discovered attack      "

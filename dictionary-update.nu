@@ -11,7 +11,7 @@
 def _db_path [] { "./chess.db" }
 
 # Tier 1000 blunder sensor concept names (Survival + Threat tiers)
-const TIER_1000_CONCEPTS = ["fork", "pin", "skewer", "discovered_attack", "hanging_piece", "material_imbalance", "king_in_check"]
+const TIER_1000_CONCEPTS = ["fork", "fork_capitalized", "fork_victimized", "pin", "skewer", "discovered_attack", "hanging_piece", "material_imbalance", "king_in_check"]
 
 def main [username: string, --db: string, --limit: int = 100] {
     let db = if ($db != null) { $db } else { (_db_path) }
@@ -25,7 +25,7 @@ def main [username: string, --db: string, --limit: int = 100] {
     let existing = (open $db | query db "
         SELECT concept_name, phase_bucket, mean, m2, count
         FROM player_baselines
-        WHERE username = ? AND concept_name IN ('fork','pin','skewer','discovered_attack','hanging_piece','material_imbalance','king_in_check')
+        WHERE username = ? AND concept_name IN ('fork','fork_capitalized','fork_victimized','pin','skewer','discovered_attack','hanging_piece','material_imbalance','king_in_check')
     " --params [$username])
 
     let existing_map = if ($existing | is-empty) {
@@ -52,10 +52,15 @@ def main [username: string, --db: string, --limit: int = 100] {
 
     let new_moves = (open $db | query db "
         SELECT m.game_id, m.ply, p.fen,
-               CASE WHEN m.color = 'white' THEN g.white ELSE g.black END as player
+               CASE WHEN m.color = 'white' THEN g.white ELSE g.black END as player,
+               m.color as player_color,
+               n.uci as next_uci, n.san as next_san, n.color as next_color,
+               nn.san as next2_san
         FROM moves m
         JOIN positions p ON m.next_position_id = p.zobrist
         JOIN games g ON m.game_id = g.game_id
+        LEFT JOIN moves n ON m.game_id = n.game_id AND m.ply + 1 = n.ply
+        LEFT JOIN moves nn ON m.game_id = nn.game_id AND m.ply + 2 = nn.ply
         WHERE (g.white = ? OR g.black = ?)
           AND NOT EXISTS (
               SELECT 1 FROM dict_update_marker dum
@@ -90,13 +95,39 @@ def main [username: string, --db: string, --limit: int = 100] {
                 else { 3 }
             )
 
-            let concepts = (
-                ($report.tactical.forks | each {|f| { name: "fork", severity: 240 }})
-                | append ($report.tactical.pins | each {|p| { name: "pin", severity: 160 }})
-                | append ($report.tactical.skewers | each {|s| { name: "skewer", severity: 150 }})
-                | append ($report.tactical.discovered | each {|d| { name: "discovered_attack", severity: 180 }})
-                | append ($report.tactical.hanging | each {|h| { name: "hanging_piece", severity: 200 }})
-            )
+            # Extract next-move destination from UCI (e2e4 → e4)
+            let next_dest = if ($row.next_uci | is-not-empty) {
+                ($row.next_uci | str substring 2..4)
+            } else { "" }
+
+            mut concepts = []
+
+            # Forks — track if the hanging piece was captured next move
+            for f in $report.tactical.forks {
+                $concepts = ($concepts | append { name: "fork", severity: 240 })
+                if ($f.hangs | is-not-empty) and ($next_dest | is-not-empty) {
+                    if $next_dest == $f.hangs.square {
+                        if $row.next_color == $f.attacker.color {
+                            $concepts = ($concepts | append { name: "fork_capitalized", severity: 240 })
+                        } else {
+                            $concepts = ($concepts | append { name: "fork_victimized", severity: 240 })
+                        }
+                    }
+                }
+            }
+
+            for p in $report.tactical.pins {
+                $concepts = ($concepts | append { name: "pin", severity: 160 })
+            }
+            for s in $report.tactical.skewers {
+                $concepts = ($concepts | append { name: "skewer", severity: 150 })
+            }
+            for d in $report.tactical.discovered {
+                $concepts = ($concepts | append { name: "discovered_attack", severity: 180 })
+            }
+            for h in $report.tactical.hanging {
+                $concepts = ($concepts | append { name: "hanging_piece", severity: 200 })
+            }
 
             $concepts | each {|c| {
                 concept_name: $c.name,

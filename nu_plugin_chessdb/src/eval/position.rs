@@ -1528,11 +1528,52 @@ fn board_to_piece_ref(board: &shakmaty::Board, sq: Square) -> Option<PieceRef> {
     })
 }
 
+/// For each fork, use shakmaty legal-move generation to determine which
+/// target piece hangs (cannot escape the fork attacker). A piece hangs if
+/// no legal move saves it from being captured.
+fn simulate_fork_hangs(chess: &Chess, forks: &mut Vec<Fork>) {
+    for fork in forks {
+        let att_sq = match shakmaty::Square::from_ascii(fork.attacker.square.as_bytes()) {
+            Ok(sq) => sq, Err(_) => continue,
+        };
+        let attacks_bb = chess.board().attacks_from(att_sq);
+
+        // Determine the forked side's color from the targets
+        let forked_color = if fork.targets.first()
+            .map(|t| t.color.as_str() == "white").unwrap_or(false)
+            { Color::White } else { Color::Black };
+
+        // Only simulate when the forked side is to move (they can try to escape)
+        // If it's the fork owner's turn, the fork was just created — the forked
+        // side will get their chance to escape next.
+        let moves = chess.legal_moves();
+
+        for target in &fork.targets {
+            let t_sq = match shakmaty::Square::from_ascii(target.square.as_bytes()) {
+                Ok(sq) => sq, Err(_) => continue,
+            };
+            // Check if the piece can move to a square not attacked by the fork attacker.
+            // Also count staying in place as "not escaping" (capture or blocking would
+            // need deeper simulation — this is the 80% case).
+            if chess.turn() == forked_color {
+                let can_escape = moves.iter().any(|m| {
+                    m.from() == Some(t_sq)
+                    && (attacks_bb & shakmaty::Bitboard::from(m.to())) == shakmaty::Bitboard::EMPTY
+                });
+                if !can_escape {
+                    fork.hangs = Some(target.clone());
+                    break; // first hanging piece is the prediction
+                }
+            }
+        }
+    }
+}
+
 fn forks_to_typed(board: &shakmaty::Board, examples: &[(Square, Vec<Square>)]) -> Vec<Fork> {
     examples.iter().filter_map(|(att, targets)| {
         let attacker = board_to_piece_ref(board, *att)?;
         let targets: Vec<PieceRef> = targets.iter().filter_map(|t| board_to_piece_ref(board, *t)).collect();
-        if targets.len() >= 2 { Some(Fork { attacker, targets }) } else { None }
+        if targets.len() >= 2 { Some(Fork { attacker, targets, hangs: None }) } else { None }
     }).collect()
 }
 
@@ -2713,7 +2754,7 @@ pub fn build_sensor_report(board: &shakmaty::Board, fen: &str, groups: &EvalGrou
     let (_, disc_ex_them) = detect_discovered(board, them);
 
     let tactical = TacticalReport {
-        forks: { let mut v = forks_to_typed(board, &fork_ex_us); v.extend(forks_to_typed(board, &fork_ex_them)); v },
+        forks: { let mut v = forks_to_typed(board, &fork_ex_us); v.extend(forks_to_typed(board, &fork_ex_them)); simulate_fork_hangs(chess, &mut v); v },
         pins: { let mut v = pins_to_typed(board, &pin_ex_us); v.extend(pins_to_typed(board, &pin_ex_them)); v },
         skewers: { let mut v = skewers_to_typed(board, &skewer_ex_us); v.extend(skewers_to_typed(board, &skewer_ex_them)); v },
         discovered: { let mut v = discovered_to_typed(board, &disc_ex_us); v.extend(discovered_to_typed(board, &disc_ex_them)); v },

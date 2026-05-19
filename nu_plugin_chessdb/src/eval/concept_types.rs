@@ -24,6 +24,10 @@ impl PieceRef {
 pub struct Fork {
     pub attacker: PieceRef,
     pub targets: Vec<PieceRef>,
+    /// The target that cannot escape — proven by legal-move simulation.
+    /// If set, shakmaty confirmed no legal move saves this piece from
+    /// the fork attacker, making it a predicted hanging piece.
+    pub hangs: Option<PieceRef>,
 }
 
 #[derive(Debug, Clone, Serialize)]
