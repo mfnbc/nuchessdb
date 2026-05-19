@@ -47,7 +47,7 @@ impl PluginCommand for DeriveCoachSignals {
     }
 }
 
-struct MoveRecord { game_id: String, ply: i64, fen: String, hugm_score: i64, player: String }
+struct MoveRecord { game_id: String, ply: i64, fen: String, hugm_score: i64, player: String, state_id: Option<u16> }
 
 fn parse_move_record(v: &Value) -> Option<MoveRecord> {
     let rec = v.as_record().ok()?;
@@ -55,17 +55,36 @@ fn parse_move_record(v: &Value) -> Option<MoveRecord> {
         .and_then(|v| v.as_int().ok())
         .unwrap_or(0) as i64;
     let player = rec.get("player").and_then(|v| v.as_str().ok()).unwrap_or("unknown").to_string();
+    let state_id = rec.get("state_id").and_then(|v| v.as_int().ok()).map(|x| x as u16);
     Some(MoveRecord {
         game_id: format!("{}", rec.get("game_id")?.as_int().ok()?),
         ply: rec.get("ply")?.as_int().ok()? as i64,
         fen: rec.get("fen")?.as_str().ok()?.to_string(),
         hugm_score,
         player,
+        state_id,
     })
 }
 
+/// Encode move states, using pre-computed state_id from ingestion when available.
+/// Falls back to full FEN→shakmaty→eval→encode_state path only for rows missing state_id.
 fn encode_move_states(rows: &[MoveRecord], span: nu_protocol::Span) -> Vec<Value> {
     rows.iter().map(|r| {
+        // Fast path: state_id already computed during process_corpus ingestion
+        if let Some(sid) = r.state_id {
+            let phase = (sid & 0x3) as u8;
+            return Value::record(nu_protocol::record! {
+                "game_id" => Value::string(&r.game_id, span),
+                "ply" => Value::int(r.ply, span),
+                "state_id" => Value::int(sid as i64, span),
+                "phase_bucket" => Value::int(phase as i64, span),
+                "has_fork" => Value::bool((sid >> 7) & 1 != 0, span),
+                "has_pin" => Value::bool((sid >> 8) & 1 != 0, span),
+                "has_hanging" => Value::bool((sid >> 9) & 1 != 0, span),
+                "king_exposed" => Value::bool((sid >> 5) & 1 != 0, span),
+            }, span);
+        }
+        // Slow path: re-parse FEN (fallback for rows without state_id)
         let fen = match shakmaty::fen::Fen::from_ascii(r.fen.as_bytes()) {
             Ok(f) => f, Err(_) => return Value::record(nu_protocol::record! {
                 "game_id" => Value::string(&r.game_id, span),

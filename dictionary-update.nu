@@ -51,9 +51,8 @@ def main [username: string, --db: string, --limit: int = 100] {
     " | ignore
 
     let new_moves = (open $db | query db "
-        SELECT m.game_id, m.ply, p.fen, p.hugm_score,
-               CASE WHEN m.color = 'white' THEN g.white ELSE g.black END as player,
-               CAST((m.ply - 1) / 2 AS INTEGER) as move_number
+        SELECT m.game_id, m.ply, p.fen,
+               CASE WHEN m.color = 'white' THEN g.white ELSE g.black END as player
         FROM moves m
         JOIN positions p ON m.next_position_id = p.zobrist
         JOIN games g ON m.game_id = g.game_id
@@ -76,9 +75,9 @@ def main [username: string, --db: string, --limit: int = 100] {
     # 3. For each position, run HUGM and extract Tier 1000 concept deltas
     let deltas = (
         $new_moves
-        | par-each {|row|
+        | each {|row|
             let eval = try {
-                $row.fen | chessdb hugm-eval --player-elo 1000
+                $row.fen | chessdb hugm-eval
             } catch { null }
             if ($eval == null) { return [] }
 
