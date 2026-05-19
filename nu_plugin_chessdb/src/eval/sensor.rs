@@ -1,5 +1,6 @@
 use serde::Serialize;
 use crate::eval::concept_types::*;
+use crate::eval::threat_graph::{EvaluatedFork, ExchangeChain};
 
 /// Full sensor report from a single position evaluation.
 /// Contains all detected concepts as typed structs, ready for JSON serialization.
@@ -11,6 +12,12 @@ pub struct SensorReport {
     pub tactical: TacticalReport,
     pub positional: PositionalReport,
     pub aggregated: AggregatedScores,
+    /// Forks with SEE material consequence (from ThreatGraph)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evaluated_forks: Vec<EvaluatedFork>,
+    /// Multi-capture exchange chains (from ThreatGraph)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exchanges: Vec<ExchangeChain>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
