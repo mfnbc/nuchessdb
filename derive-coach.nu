@@ -44,10 +44,12 @@ def main [username: string, --db: string, --min-games: int = 10] {
 
     # Insert baselines — Welford states (mean, m2, count) per concept per phase
     if ($signals.baselines | length) > 0 {
+        # Delete existing rows for this user to avoid duplicates (upsert)
+        try { open $db | query db "DELETE FROM player_baselines WHERE username = ?" --params [$username] } catch { }
         $signals.baselines
         | rename username phase_bucket concept_name mean std
-        | insert m2 {|r| $r.std * $r.std}
         | insert count { 1 }
+        | insert m2 {|r| if $r.count > 1 { ($r.std * $r.std * (($r.count - 1) | into float)) } else { 0.0 } }
         | insert last_updated { (date now | format date "%Y-%m-%dT%H:%M:%SZ") }
         | select username concept_name phase_bucket mean m2 count last_updated
         | uniq-by username concept_name phase_bucket
