@@ -400,13 +400,15 @@ def coach-review-game [game_id: int, --perspective: string = "white"] {
         let eval = ($fen_record.fen | chessdb hugm-eval --verbose true --player-elo $player_elo)
         let report = $eval.sensor_report
 
-        # 5. Extract typed concepts
+        # 5. Extract concepts (forks from ThreatGraph/SEE, others from sensor)
         let concepts = (
-            $report.tactical.forks | each {|f| {
-                name: "fork", severity: 240, elo_min: 1000,
-                side: $f.attacker.color,
-                data: { attacker: $f.attacker, targets: $f.targets }
-            }}
+            ($report.evaluated_forks | default [] | each {|f| {
+                name: "fork", severity: (($f.see_cp | into int | if $in < 1 { 240 } else { $in })),
+                elo_min: 1000, side: $f.attacker.color,
+                data: { attacker: $f.attacker, targets: $f.targets,
+                        hangs: $f.hangs, see_cp: $f.see_cp,
+                        consequence: ($f.consequence | default "Unknown") }
+            }})
             | append ($report.tactical.pins | each {|p| {
                 name: "pin", severity: 160, elo_min: 1200,
                 side: $p.attacker.color,

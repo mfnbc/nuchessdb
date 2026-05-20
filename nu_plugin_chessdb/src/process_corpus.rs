@@ -18,6 +18,14 @@ struct PendingPos {
     state_id: u16,
 }
 
+/// Lightweight FEN entry collected during game parsing.
+/// Evaluated in batch after all games are parsed.
+struct FenToEval {
+    zobrist: String,
+    fen: String,
+    board_pieces: String,
+}
+
 pub struct ProcessCorpus;
 
 impl PluginCommand for ProcessCorpus {
@@ -65,8 +73,8 @@ impl PluginCommand for ProcessCorpus {
         let mut out_games = Vec::new();
         let mut out_moves = Vec::new();
 
-        // We'll accumulate pending positions and materialize final Value::record after optional batch evaluation
-        let mut pending_positions: Vec<PendingPos> = Vec::new();
+        // Phase 1: collect FENs during game parsing (no evaluation yet)
+        let mut fens_to_eval: Vec<FenToEval> = Vec::new();
         let mut unique_positions = HashSet::new();
 
         let username: Option<String> = call.get_flag("username")?;
@@ -153,13 +161,10 @@ impl PluginCommand for ProcessCorpus {
                 if let Ok(move_rows) = pgn_to_fens(pgn, span) {
                     let initial_zobrist = "463b96181691fc9c".to_string();
                     if unique_positions.insert(initial_zobrist.clone()) {
-                        pending_positions.push(PendingPos {
+                        fens_to_eval.push(FenToEval {
                             zobrist: initial_zobrist.clone(),
                             fen: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1".to_string(),
                             board_pieces: "rnbqkbnrppppppppPPPPPPPPRNBQKBNR".to_string(),
-                            hugm_score: 0,
-                            hugm_eval_arr: "[]".to_string(),
-                            state_id: 0,
                         });
                     }
                     let mut prev_zobrist: Option<String> = Some(initial_zobrist);
@@ -168,41 +173,11 @@ impl PluginCommand for ProcessCorpus {
                         let z_hex = m_row.zobrist.clone();
 
                         if unique_positions.insert(z_hex.clone()) {
-                            // On-the-fly Deep Evaluation
-                            let (hugm_score, hugm_eval_arr, state_id) = match analyze_fen_with_engine_score(&m_row.fen, None) {
-                                Ok(rec) => {
-                                    let sid = rec.sensor_report.state_id;
-                                    // Serialize the decomposed groups directly into a flat JSON integer array
-                                    let arr = vec![
-                                        rec.groups.material.blended,
-                                        rec.groups.pawn_structure.blended,
-                                        rec.groups.piece_activity.blended,
-                                        rec.groups.king_safety.blended,
-                                        rec.groups.passed_pawns.blended,
-                                        rec.groups.development.blended,
-                                        rec.groups.vector_features.blended,
-                                        rec.groups.strategic.blended,
-                                        rec.groups.scaling.value,
-                                        rec.groups.drawishness.value,
-                                        rec.groups.override_.value,
-                                    ];
-                                    let json_str = serde_json::to_string(&arr).unwrap_or_else(|_| "[]".to_string());
-                                    (rec.final_score, json_str, sid)
-                                },
-                                Err(_) => (0, "[]".to_string(), 0u16),
-                            };
-                            
-                            // Capture the raw material remaining on the board as a lightweight string (e.g. "rnbqkbnr")
-                            // so the LLM doesn't have to guess what pieces are left based on the FEN.
                             let board_pieces: String = m_row.fen.chars().take_while(|c| *c != ' ').filter(|c| c.is_alphabetic()).collect();
-
-                            pending_positions.push(PendingPos {
+                            fens_to_eval.push(FenToEval {
                                 zobrist: z_hex.clone(),
                                 fen: m_row.fen.clone(),
                                 board_pieces,
-                                hugm_score,
-                                hugm_eval_arr,
-                                state_id,
                             });
                         }
 
@@ -243,9 +218,48 @@ impl PluginCommand for ProcessCorpus {
         }
 
 
-        // materialize final out_positions (no Stockfish scores)
+        // Phase 2: batch-evaluate all unique FENs in parallel (Rayon)
+        use rayon::prelude::*;
+        let eval_results: Vec<PendingPos> = fens_to_eval
+            .par_iter()
+            .map(|fe| {
+                let (hugm_score, hugm_eval_arr, state_id) =
+                    match analyze_fen_with_engine_score(&fe.fen, None) {
+                        Ok(rec) => {
+                            let sid = rec.sensor_report.state_id;
+                            let arr = vec![
+                                rec.groups.material.blended,
+                                rec.groups.pawn_structure.blended,
+                                rec.groups.piece_activity.blended,
+                                rec.groups.king_safety.blended,
+                                rec.groups.passed_pawns.blended,
+                                rec.groups.development.blended,
+                                rec.groups.vector_features.blended,
+                                rec.groups.strategic.blended,
+                                rec.groups.scaling.value,
+                                rec.groups.drawishness.value,
+                                rec.groups.override_.value,
+                            ];
+                            let json_str =
+                                serde_json::to_string(&arr).unwrap_or_else(|_| "[]".to_string());
+                            (rec.final_score, json_str, sid)
+                        }
+                        Err(_) => (0, "[]".to_string(), 0u16),
+                    };
+                PendingPos {
+                    zobrist: fe.zobrist.clone(),
+                    fen: fe.fen.clone(),
+                    board_pieces: fe.board_pieces.clone(),
+                    hugm_score,
+                    hugm_eval_arr,
+                    state_id,
+                }
+            })
+            .collect();
+
+        // Phase 3: materialize out_positions
         let mut out_positions = Vec::new();
-        for p in pending_positions.into_iter() {
+        for p in eval_results.into_iter() {
             let pos_record = record! {
                 "zobrist" => Value::string(&p.zobrist, span),
                 "fen" => Value::string(&p.fen, span),
