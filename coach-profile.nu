@@ -36,6 +36,42 @@ def main [username: string, --db: string, --json, --examples: int = 3] {
         WHERE username = ? AND consumed = 0
     " --params [$username] | first | get cnt)
 
+    # Positional component averages by color and phase
+    let positional_raw = (open $db | query db "
+        SELECT m.color, ms.phase_bucket, p.hugm_eval_arr
+        FROM moves m
+        JOIN positions p ON m.next_position_id = p.zobrist
+        JOIN games g ON m.game_id = g.game_id
+        JOIN move_states ms ON m.game_id = ms.game_id AND m.ply = ms.ply
+        WHERE g.white = ? OR g.black = ?
+    " --params [$username, $username])
+
+    let positional = if ($positional_raw | length) > 100 {
+        $positional_raw | each {|r|
+            let arr = try { $r.hugm_eval_arr | from json } catch { [] }
+            let mat = if ($arr | length) > 0 { $arr | get 0 | into int } else { 0 }
+            let pwn = if ($arr | length) > 1 { $arr | get 1 | into int } else { 0 }
+            let act = if ($arr | length) > 2 { $arr | get 2 | into int } else { 0 }
+            let kng = if ($arr | length) > 3 { $arr | get 3 | into int } else { 0 }
+            { color: $r.color, phase: ($r.phase_bucket | into int),
+              material: $mat, pawns: $pwn, activity: $act, king: $kng }
+        }
+        | group-by {|r| $"($r.color):($r.phase)"}
+        | items {|key, group|
+            let n = ($group | length)
+            let parts = ($key | split row ":")
+            let phase_name = match ($parts.1 | into int) {
+                0 => "endgame", 1 => "late_mid", 2 => "midgame", _ => "opening"
+            }
+            {
+                color: $parts.0, phase: $phase_name, n: $n,
+                pawns: (($group | get pawns | math sum) / ($n | into float) | math round --precision 1),
+                activity: (($group | get activity | math sum) / ($n | into float) | math round --precision 1),
+                king: (($group | get king | math sum) / ($n | into float) | math round --precision 1),
+            }
+        }
+    } else { [] }
+
     let game_count = (open $db | query db "
         SELECT COUNT(DISTINCT m.game_id) as cnt
         FROM moves m JOIN games g ON m.game_id = g.game_id
@@ -112,6 +148,7 @@ def main [username: string, --db: string, --json, --examples: int = 3] {
             games: $game_count
             unreviewed_anomalies: $anomaly_count
             phase_profile: $phase_profile
+            positional_components: ($positional)
             concepts: ($concept_aggregates)
             anomalies: ($anomalies | each {|a| {
                 game_id: ($a.game_id | into string), ply: $a.ply,
@@ -147,6 +184,21 @@ def main [username: string, --db: string, --json, --examples: int = 3] {
             $tn = $tn + ($row.count | into float)
         }
         if $tn > 0.0 { print ""; print $"  Average eval swing: (($tc / $tn | math round --precision 0))cp per move" }
+    }
+
+    if ($positional | is-not-empty) {
+        let header = $"(ansi green_bold)Positional components — avg cp per move(ansi reset)"
+        print ""; print $header; print ""
+        let hdr_color = ("color" | fill -w 10)
+        let hdr_phase = ("phase" | fill -w 10)
+        let hdr_n = ("n" | fill -w 6)
+        print $"  ($hdr_color) ($hdr_phase) ($hdr_n)  pawns  activity   king"
+        print $"  ---------- ---------- ------  -----  --------  -----"
+        for row in $positional {
+            let color = ($row.color | fill -w 10)
+            let phase = ($row.phase | fill -w 10)
+            print $"  ($color) ($phase) ($row.n | fill -w 6)  ($row.pawns | fill -w 6)  ($row.activity | fill -w 9)  ($row.king | fill -w 6)"
+        }
     }
 
     if ($concept_baselines | is-not-empty) {
