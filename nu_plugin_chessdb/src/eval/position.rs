@@ -877,6 +877,17 @@ fn king_safety_score(board: &shakmaty::Board, color: Color, in_check: bool, _pha
         score -= 80;
     }
 
+    // Critter-style pawn_safe: squares NOT attacked by enemy pawns.
+    // King is safer when standing in pawn shelter.
+    let enemy_pawns = board.by_color(color.other()) & board.by_role(Role::Pawn);
+    let mut pawn_safe = !Bitboard::EMPTY; // all squares safe initially
+    for sq in enemy_pawns {
+        pawn_safe = pawn_safe & !board.attacks_from(sq);
+    }
+    if (Bitboard::from(king_sq) & pawn_safe).any() {
+        score += 15; // king stands on pawn-protected square
+    }
+
     let attackers = board.attacks_to(king_sq, color.other(), board.occupied());
     // Critter-style weighted king attacks: queen=300, rook=200, minor=100
     let queen_att  = (attackers & board.by_role(Role::Queen)).count() as i64 * 3;
