@@ -251,7 +251,10 @@ def import-records [games: list, platform: string, username: string] {
                     INSERT OR IGNORE INTO move_states (game_id, ply, state_id, phase_bucket, has_fork, has_pin, has_hanging, king_exposed)
                     SELECT m.game_id, m.ply, COALESCE(p.state_id, 0),
                            (COALESCE(p.state_id, 0) & 3),
-                           0, 0, 0, 0
+                           ((COALESCE(p.state_id, 0) >> 7) & 1),
+                           ((COALESCE(p.state_id, 0) >> 8) & 1),
+                           ((COALESCE(p.state_id, 0) >> 9) & 1),
+                           ((COALESCE(p.state_id, 0) >> 5) & 1)
                     FROM moves m
                     JOIN positions p ON m.next_position_id = p.zobrist
                 " | ignore
