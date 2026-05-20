@@ -993,6 +993,18 @@ fn in_front(color: Color, sq: Square) -> Bitboard {
     bb ^ sq_bb
 }
 
+/// Critter-style mobility mask: squares a piece can actually move to.
+/// Excludes friendly occupied squares and squares attacked by enemy pawns.
+fn mobility_mask(board: &shakmaty::Board, color: Color) -> Bitboard {
+    let friendly = board.by_color(color);
+    let enemy_pawns = board.by_color(color.other()) & board.by_role(Role::Pawn);
+    let mut enemy_pawn_attacks = Bitboard::EMPTY;
+    for sq in enemy_pawns {
+        enemy_pawn_attacks |= board.attacks_from(sq);
+    }
+    !(friendly | enemy_pawn_attacks)
+}
+
 fn piece_activity_score(
     board: &shakmaty::Board,
     color: Color,
@@ -1000,6 +1012,7 @@ fn piece_activity_score(
     pawn_safe: Bitboard,
     king_ring_bb: Bitboard,
 ) -> (i64, serde_json::Map<String, serde_json::Value>) {
+    let mob_mask = mobility_mask(board, color);
     let mut score = 0;
     let occupied = board.occupied();
     let enemy = board.by_color(color.other());
@@ -1010,7 +1023,7 @@ fn piece_activity_score(
     for sq in board.by_color(color) & board.by_role(Role::Knight) {
         let atk = attacks::knight_attacks(sq);
         let mut local = 0;
-        local += 15 * (atk & in_front(color, sq)).count() as i64;
+        local += 15 * (atk & mob_mask & in_front(color, sq)).count() as i64;
         if (atk & king_ring_bb) != Bitboard::EMPTY {
             local += 10;
         }
@@ -1053,7 +1066,7 @@ fn piece_activity_score(
     for sq in board.by_color(color) & board.by_role(Role::Bishop) {
         let atk = attacks::bishop_attacks(sq, occupied);
         let mut local = 0;
-        local += 12 * (atk & in_front(color, sq)).count() as i64;
+        local += 12 * (atk & mob_mask & in_front(color, sq)).count() as i64;
         if (atk & king_ring_bb) != Bitboard::EMPTY {
             local += 13;
         }
@@ -1176,7 +1189,7 @@ fn piece_activity_score(
     for sq in board.by_color(color) & board.by_role(Role::Queen) {
         let atk = attacks::queen_attacks(sq, occupied);
         let mut local = 0;
-        local += 5 * (atk & !board.by_color(color)).count() as i64 / 2;
+        local += 5 * (atk & mob_mask).count() as i64 / 2;
         if (atk & king_ring_bb) != Bitboard::EMPTY {
             local += 13;
         }
