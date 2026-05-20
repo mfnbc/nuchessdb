@@ -1159,18 +1159,33 @@ fn piece_activity_score(
             open_file_controlled += 1;
             local += w.rook_open_file_bonus; // configurable
         }
-        if color.is_white() {
-            if sq.rank() == Rank::Seventh {
+        // Critter-style rook rank bonus: only if enemy has king or pawns there
+        let rook_rank = sq.rank();
+        let (seventh, eighth, sixth) = if color.is_white() {
+            (Rank::Seventh, Rank::Eighth, Rank::Sixth)
+        } else {
+            (Rank::Second, Rank::First, Rank::Third)
+        };
+        let enemy_back_ranks = if color.is_white() {
+            Bitboard::from(Rank::Seventh) | Bitboard::from(Rank::Eighth)
+        } else {
+            Bitboard::from(Rank::First) | Bitboard::from(Rank::Second)
+        };
+        let enemy_king_or_pawns = enemy & (board.by_role(Role::King) | board.by_role(Role::Pawn));
+        if rook_rank == seventh {
+            if (enemy_king_or_pawns & enemy_back_ranks).any() {
                 local += w.rook_seventh_bonus;
                 rook_on_seventh += 1;
-            } else if sq.rank() == Rank::Eighth || sq.rank() == Rank::Sixth {
+            }
+        } else if rook_rank == eighth {
+            let enemy_king = board.by_color(color.other()) & board.by_role(Role::King);
+            if (enemy_king & Bitboard::from(eighth)).any() {
                 local += 13;
             }
-        } else if sq.rank() == Rank::Second {
-            local += w.rook_seventh_bonus;
-            rook_on_seventh += 1;
-        } else if sq.rank() == Rank::First || sq.rank() == Rank::Third {
-            local += 13;
+        } else if rook_rank == sixth {
+            if (enemy_king_or_pawns & enemy_back_ranks).any() {
+                local += 10;
+            }
         }
         rook_score += local;
     }
