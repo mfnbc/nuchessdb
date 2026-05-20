@@ -21,6 +21,8 @@ pub struct ThreatGraph {
     pub pieces: [Option<Piece>; 64],
     /// Side to move
     pub turn: Color,
+    /// King squares: (white_king, black_king)
+    pub kings: (Option<Square>, Option<Square>),
     /// Full board for SEE context
     pub board: Board,
 }
@@ -51,6 +53,7 @@ impl ThreatGraph {
             attackers_to,
             pieces,
             turn: chess.turn(),
+            kings: (board.king_of(Color::White), board.king_of(Color::Black)),
             board: board.clone(),
         }
     }
@@ -80,61 +83,73 @@ impl ThreatGraph {
         }
     }
 
-    /// Run SEE: given a square where a capture happens, return the optimal
-    /// recapture chain AND net centipawns. Each step records who captured what.
+    /// After a capture on `sq` by `side`, check if this delivers check.
+    fn delivers_check(&self, board: &Board, cap_sq: Square, side: Color) -> bool {
+        let opp_king = if side.is_white() { self.kings.1 } else { self.kings.0 };
+        let Some(king_sq) = opp_king else { return false };
+        let occupied = board.occupied();
+        // Direct: the capture square attacks the king (piece now sits there)
+        if board.attacks_from(cap_sq) & Bitboard::from(king_sq) != Bitboard::EMPTY { return true; }
+        // Discovered: any piece of `side` attacks the king (victim was blocking)
+        board.attacks_to(king_sq, side, occupied) != Bitboard::EMPTY
+    }
+
+    /// Run SEE: mutable board clone for x-ray discovery + check interrupts.
+    /// A check interrupt cancels the recapture chain (opponent must answer check).
     pub fn see_chain(&self, sq: Square, initiator: Color) -> (Vec<CaptureStep>, i64) {
         let mut steps = Vec::new();
-        let target_piece_val = self.pieces[Self::idx(sq)]
+        let mut board = self.board.clone();
+        let victim_val = self.pieces[Self::idx(sq)]
             .map(|p| Self::piece_value(p.role)).unwrap_or(0);
-        let mut net = target_piece_val;
+        let mut net = victim_val;
 
-        // Record the piece being captured (belongs to opponent of initiator)
         let victim_color = if initiator.is_white() { "black" } else { "white" };
         let victim_role = self.pieces[Self::idx(sq)]
             .map(|p| role_name(p.role)).unwrap_or_default();
         steps.push(CaptureStep {
-            piece: victim_role,
-            color: victim_color.into(),
-            square: square_name(sq),
-            value_cp: target_piece_val,
+            piece: victim_role, color: victim_color.into(),
+            square: square_name(sq), value_cp: victim_val,
         });
+        board.discard_piece_at(sq);
+
+        // Check interrupt: if initiator's capture delivers check, chain ends
+        if self.delivers_check(&board, sq, initiator) {
+            return (steps, net);
+        }
 
         let mut att_sq = sq;
         let mut side_to_capture = initiator.other();
 
         loop {
-            let attackers = self.attackers_to[Self::idx(att_sq)]
-                & self.board.by_color(side_to_capture);
+            let occupied = board.occupied();
+            let attackers = board.attacks_to(att_sq, side_to_capture, occupied);
             if attackers == Bitboard::EMPTY { break; }
 
             let mut best_sq = None;
-            let mut best_val = i64::MAX;
             let mut best_role = Role::Pawn;
             for role in [Role::Pawn, Role::Knight, Role::Bishop, Role::Rook, Role::Queen, Role::King] {
-                let role_bb = attackers & self.board.by_role(role);
-                if let Some(sq) = role_bb.into_iter().next() {
-                    let val = Self::piece_value(role);
-                    if val < best_val {
-                        best_val = val; best_sq = Some(sq); best_role = role;
-                    }
-                    break;
+                if let Some(recap_sq) = (attackers & board.by_role(role)).into_iter().next() {
+                    best_sq = Some(recap_sq); best_role = role; break;
                 }
             }
-            match best_sq {
-                Some(sq) => {
-                    let delta = best_val * if side_to_capture == initiator { 1 } else { -1 };
-                    net += delta;
-                    steps.push(CaptureStep {
-                        piece: role_name(best_role),
-                        color: if side_to_capture.is_white() { "white" } else { "black" }.into(),
-                        square: square_name(sq),
-                        value_cp: best_val,
-                    });
-                    att_sq = sq;
-                    side_to_capture = side_to_capture.other();
+            if let Some(recap_sq) = best_sq {
+                let val = Self::piece_value(best_role);
+                let delta = val * if side_to_capture == initiator { 1 } else { -1 };
+                net += delta;
+                steps.push(CaptureStep {
+                    piece: role_name(best_role),
+                    color: if side_to_capture.is_white() { "white" } else { "black" }.into(),
+                    square: square_name(recap_sq), value_cp: val,
+                });
+                board.discard_piece_at(recap_sq);
+
+                // Check interrupt after recapture too
+                if self.delivers_check(&board, recap_sq, side_to_capture) {
+                    return (steps, net);
                 }
-                None => break,
-            }
+                att_sq = recap_sq;
+                side_to_capture = side_to_capture.other();
+            } else { break; }
         }
         (steps, net)
     }

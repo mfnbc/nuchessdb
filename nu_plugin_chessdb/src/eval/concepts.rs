@@ -26,8 +26,8 @@ pub fn extract_concepts(groups: &EvalGroups, _side_to_move: &str) -> Vec<Concept
     }
 
     // Bishop pair (ELO 1800+)
-    let bp = groups.material.terms.get("white_bishop_count").and_then(|v| v.as_i64()).unwrap_or(0);
-    let bb = groups.material.terms.get("black_bishop_count").and_then(|v| v.as_i64()).unwrap_or(0);
+    let bp = groups.material.terms.get("white_bishops").and_then(|v| v.as_i64()).unwrap_or(0);
+    let bb = groups.material.terms.get("black_bishops").and_then(|v| v.as_i64()).unwrap_or(0);
     if bp >= 2 { concepts.push(Concept { name: "bishop_pair".into(), severity: 40, side: "white".into(), phrase: "White has the bishop pair".into(), elo_min: 1800 }); }
     if bb >= 2 { concepts.push(Concept { name: "bishop_pair".into(), severity: 40, side: "black".into(), phrase: "Black has the bishop pair".into(), elo_min: 1800 }); }
 
