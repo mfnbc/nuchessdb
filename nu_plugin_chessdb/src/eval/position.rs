@@ -878,8 +878,12 @@ fn king_safety_score(board: &shakmaty::Board, color: Color, in_check: bool, _pha
     }
 
     let attackers = board.attacks_to(king_sq, color.other(), board.occupied());
-    let danger = (attackers.count() as i64).pow(2).min(50);
-    score -= danger * 5;
+    // Critter-style weighted king attacks: queen=300, rook=200, minor=100
+    let queen_att  = (attackers & board.by_role(Role::Queen)).count() as i64 * 3;
+    let rook_att  = (attackers & board.by_role(Role::Rook)).count() as i64 * 2;
+    let minor_att = (attackers & (board.by_role(Role::Knight) | board.by_role(Role::Bishop))).count() as i64;
+    let danger = (queen_att + rook_att + minor_att).min(20);
+    score -= danger * 12;
 
     let own_pawns = board.by_color(color) & board.by_role(Role::Pawn);
     let enemy_pawns = board.by_color(color.other()) & board.by_role(Role::Pawn);
