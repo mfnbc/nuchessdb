@@ -107,6 +107,9 @@ def main [username: string, --db: string, --limit: int = 100] {
             let next2_dest = if ($row.next2_uci | is-not-empty) {
                 ($row.next2_uci | str substring 2..4)
             } else { "" }
+            let next3_dest = if ($row.next3_uci | is-not-empty) {
+                ($row.next3_uci | str substring 2..4)
+            } else { "" }
 
             mut concepts = []
 
@@ -123,11 +126,13 @@ def main [username: string, --db: string, --limit: int = 100] {
 
                     # Count how many chain steps the player matched
                     let actual_dests = [$next_dest, $next2_dest, $next3_dest]
-                    let mut steps_done = 0
-                    for i in 1..<($chain | length) {
+                    mut steps_done = 0
+                    for i in 1..($chain | length) {
                         let step = ($chain | get $i)
+                        let step_sq = ($step | get square)
                         let d = ($actual_dests | get ($i - 1))
-                        if ($d | is-not-empty) and $d == $step.square
+                        let match = if ($d | is-not-empty) and ($d == $step_sq) { true } else { false }
+                        if $match
                             { $steps_done = $steps_done + 1 } else { break }
                     }
 
