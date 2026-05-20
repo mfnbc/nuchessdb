@@ -139,6 +139,10 @@ fn get_field_i64(v: &Value, key: &str) -> Option<i64> {
     v.as_record().ok().and_then(|r| r.get(key)).and_then(|v| v.as_int().ok()).map(|x| x as i64)
 }
 
+fn get_field_bool(v: &Value, key: &str) -> bool {
+    v.as_record().ok().and_then(|r| r.get(key)).and_then(|v| v.as_bool().ok()).unwrap_or(false)
+}
+
 fn compute_baselines(rows: &[MoveRecord], states: &[Value]) -> HashMap<(String, u8, String), (f64, f64)> {
     let mut prev_score: HashMap<(String, String), i64> = HashMap::new(); // (player, game_id) → prev_score
     let mut baselines: HashMap<(String, u8, String), Welford> = HashMap::new(); // (player, phase, concept) → stats
@@ -150,14 +154,30 @@ fn compute_baselines(rows: &[MoveRecord], states: &[Value]) -> HashMap<(String, 
         } else { 0.0 };
         prev_score.insert(game_key, row.hugm_score);
         if delta < 1.0 { continue; }
-        let key = (row.player.clone(), phase_bucket, "hugm_delta".to_string());
-        baselines.entry(key).or_insert_with(Welford::new).update(delta);
+        // Always track overall eval swing
+        baselines.entry((row.player.clone(), phase_bucket, "hugm_delta".into()))
+            .or_insert_with(Welford::new).update(delta);
+        // Per-concept baselines: how does the player's eval swing differ
+        // when specific tactical patterns are present?
+        let s = &states[i];
+        if get_field_bool(s, "has_fork") {
+            baselines.entry((row.player.clone(), phase_bucket, "fork".into()))
+                .or_insert_with(Welford::new).update(delta);
+        }
+        if get_field_bool(s, "has_pin") {
+            baselines.entry((row.player.clone(), phase_bucket, "pin".into()))
+                .or_insert_with(Welford::new).update(delta);
+        }
+        if get_field_bool(s, "has_hanging") {
+            baselines.entry((row.player.clone(), phase_bucket, "hanging_piece".into()))
+                .or_insert_with(Welford::new).update(delta);
+        }
     }
     baselines.into_iter().map(|((p, ph, cn), w)| ((p, ph, cn), (w.mean, w.std_dev()))).collect()
 }
 
 fn detect_anomalies(rows: &[MoveRecord], states: &[Value], baselines: &HashMap<(String, u8, String), (f64, f64)>, _min_games: i64, span: nu_protocol::Span) -> Vec<Value> {
-    let mut prev_score: HashMap<(String, String), i64> = HashMap::new(); // (player, game_id) → prev_score
+    let mut prev_score: HashMap<(String, String), i64> = HashMap::new();
     let mut results = Vec::new();
     for (i, row) in rows.iter().enumerate() {
         let game_key = (row.player.clone(), row.game_id.clone());
@@ -168,20 +188,31 @@ fn detect_anomalies(rows: &[MoveRecord], states: &[Value], baselines: &HashMap<(
         if delta < 5.0 { continue; }
         let phase_bucket = states.get(i).and_then(|v| get_field_i64(v, "phase_bucket")).unwrap_or(1) as u8;
         let state_id = states.get(i).and_then(|v| get_field_i64(v, "state_id")).unwrap_or(0);
-        let key = (row.player.clone(), phase_bucket, "hugm_delta".to_string());
-        if let Some((mean, std)) = baselines.get(&key) {
-            let z = (delta - mean) / std;
-            if z > 2.0 {
-                results.push(Value::record(nu_protocol::record! {
-                    "player" => Value::string(&row.player, span),
-                    "game_id" => Value::string(&row.game_id, span),
-                    "ply" => Value::int(row.ply, span),
-                    "state_id" => Value::int(state_id, span),
-                    "anomaly_type" => Value::string("z_score", span),
-                    "concept_name" => Value::string("hugm_delta", span),
-                    "z_score" => Value::float(z, span),
-                    "severity" => Value::float(delta, span),
-                }, span));
+        let s = &states[i];
+        // Check per-concept baselines when the concept is present
+        let check_concepts: [(&str, bool); 4] = [
+            ("hugm_delta", true),  // always check overall
+            ("fork", get_field_bool(s, "has_fork")),
+            ("pin", get_field_bool(s, "has_pin")),
+            ("hanging_piece", get_field_bool(s, "has_hanging")),
+        ];
+        for (concept, should_check) in &check_concepts {
+            if !should_check { continue; }
+            let key = (row.player.clone(), phase_bucket, concept.to_string());
+            if let Some((mean, std)) = baselines.get(&key) {
+                let z = (delta - mean) / std;
+                if z > 2.0 {
+                    results.push(Value::record(nu_protocol::record! {
+                        "player" => Value::string(&row.player, span),
+                        "game_id" => Value::string(&row.game_id, span),
+                        "ply" => Value::int(row.ply, span),
+                        "state_id" => Value::int(state_id, span),
+                        "anomaly_type" => Value::string("z_score", span),
+                        "concept_name" => Value::string(*concept, span),
+                        "z_score" => Value::float(z, span),
+                        "severity" => Value::float(delta, span),
+                    }, span));
+                }
             }
         }
     }
