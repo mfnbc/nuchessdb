@@ -49,7 +49,7 @@ fn main() -> Result<()> {
         let rec: InputRecord = serde_json::from_str(&line)?;
         let engine_score = rec.engine_score;
         let analysis = if engine_score.is_some() {
-            nu_plugin_chessdb::eval::analyze_fen_with_engine_score(&rec.fen, engine_score)
+            nu_plugin_chessdb::eval::analyze_fen_with_engine_score(&rec.fen, engine_score, None)
         } else {
             nu_plugin_chessdb::eval::analyze_fen(&rec.fen)
         };

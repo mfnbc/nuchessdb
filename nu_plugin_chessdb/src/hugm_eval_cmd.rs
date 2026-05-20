@@ -72,7 +72,7 @@ impl PluginCommand for HugmEval {
         match input_value {
             Value::String { val, .. } => {
                 // Single FEN string
-                let record = crate::eval::analyze_fen_with_engine_score(&val, engine_score)
+                let record = crate::eval::analyze_fen_with_engine_score(&val, engine_score, player_elo)
                     .map_err(|e| LabeledError::new(e.to_string()).with_label("eval error", span))?;
 
                 let mut json_val = serde_json::to_value(&record).map_err(|e| {
@@ -117,7 +117,7 @@ impl PluginCommand for HugmEval {
                 let results_res: Vec<Result<Value, LabeledError>> = fens
                     .par_iter()
                     .map(|fen| {
-                        match crate::eval::analyze_fen_with_engine_score(fen, engine_score) {
+                        match crate::eval::analyze_fen_with_engine_score(fen, engine_score, player_elo) {
                             Ok(record) => {
                                 let mut json_val = serde_json::to_value(&record).map_err(|e| LabeledError::new(e.to_string()).with_label("serialization error", span))?;
                                 if include_verbose {

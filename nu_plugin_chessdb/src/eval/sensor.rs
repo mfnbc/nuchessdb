@@ -18,6 +18,9 @@ pub struct SensorReport {
     /// Multi-capture exchange chains (from ThreatGraph)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exchanges: Vec<ExchangeChain>,
+    /// ELO-gated, ranked issues for coaching (from concepts.rs)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gated_issues: Vec<crate::eval::concepts::GatedIssue>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]

@@ -103,7 +103,7 @@ fn encode_move_states(rows: &[MoveRecord], span: nu_protocol::Span) -> Vec<Value
         };
         let phase = crate::eval::compute_phase(chess.board());
         let groups = crate::eval::compute_groups(&chess, phase, 0);
-        let sensor = crate::eval::build_sensor_report(chess.board(), &r.fen, &groups, &chess, phase);
+        let sensor = crate::eval::build_sensor_report(chess.board(), &r.fen, &groups, &chess, phase, None);
         let state = crate::eval::encode_state(&sensor, &groups, phase);
         Value::record(nu_protocol::record! {
             "game_id" => Value::string(&r.game_id, span),

@@ -134,7 +134,7 @@ pub fn concepts_for_elo(concepts: &[Concept], elo: i32) -> Vec<&Concept> {
 }
 
 /// A gated issue scored by magnitude × severity × elo_relevance × confidence.
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct GatedIssue {
     pub name: String,
     pub severity: i64,

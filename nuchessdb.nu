@@ -400,45 +400,30 @@ def coach-review-game [game_id: int, --perspective: string = "white"] {
         let eval = ($fen_record.fen | chessdb hugm-eval --verbose true --player-elo $player_elo)
         let report = $eval.sensor_report
 
-        # 5. Extract concepts (forks from ThreatGraph/SEE, others from sensor)
-        let concepts = (
-            ($report.evaluated_forks | default [] | each {|f| {
-                name: "fork", severity: (($f.see_cp | into int | if $in < 1 { 240 } else { $in })),
-                elo_min: 1000, side: $f.attacker.color,
-                data: { attacker: $f.attacker, targets: $f.targets,
-                        hangs: $f.hangs, see_cp: $f.see_cp,
-                        consequence: ($f.consequence | default "Unknown") }
-            }})
-            | append ($report.tactical.pins | each {|p| {
-                name: "pin", severity: 160, elo_min: 1200,
-                side: $p.attacker.color,
-                data: { attacker: $p.attacker, pinned: $p.pinned,
-                        shielded: $p.shielded, pin_type: $p.pin_type }
-            }})
-            | append ($report.tactical.skewers | each {|s| {
-                name: "skewer", severity: 150, elo_min: 1200,
-                side: $s.attacker.color,
-                data: { attacker: $s.attacker, front: $s.front, behind: $s.behind }
-            }})
-            | append ($report.tactical.hanging | each {|h| {
-                name: "hanging_piece", severity: 200, elo_min: 1000,
-                side: $h.piece.color,
-                data: { piece: $h.piece, attacker_count: $h.attacker_count }
-            }})
-            | sort-by severity | reverse
-        )
+        # 5. Extract ELO-gated ranked concepts (single source: Rust concepts.rs)
+        let concepts = if ($report.gated_issues | is-not-empty) {
+            $report.gated_issues | each {|gi| {
+                name: $gi.name,
+                severity: $gi.severity,
+                elo_min: $gi.elo_min,
+                side: $gi.side,
+                phrase: $gi.phrase,
+                score: $gi.score,
+            }}
+        } else { [] }
 
         if ($concepts | is-empty) {
             print "  No tactical concepts detected in this position."
             continue
         }
 
-        # 6. Format for coach contract
+        # 6. Format for coach contract (concepts now include natural-language phrases)
         let coach_input = {
             fen: $fen_record.fen,
             player_elo: $player_elo,
             concepts: $concepts,
             scores: $report.aggregated,
+            chaos: $report.aggregated.chaos,
         }
 
         # 7. Call nu-agent CLI (canonical entry point — handles config cascade)

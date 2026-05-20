@@ -2665,7 +2665,7 @@ fn build_material_balance(groups: &EvalGroups) -> Option<MaterialBalance> {
     Some(MaterialBalance { white, black, centipawns, bishop_pair_white, bishop_pair_black })
 }
 
-pub fn build_sensor_report(board: &shakmaty::Board, fen: &str, groups: &EvalGroups, chess: &Chess, phase: u8) -> SensorReport {
+pub fn build_sensor_report(board: &shakmaty::Board, fen: &str, groups: &EvalGroups, chess: &Chess, phase: u8, player_elo: Option<i32>) -> SensorReport {
     let us = chess.turn();
     let them = us.other();
 
@@ -2736,6 +2736,11 @@ pub fn build_sensor_report(board: &shakmaty::Board, fen: &str, groups: &EvalGrou
         crate::eval::concepts::encode_state(&tmp, groups, phase).state_id
     };
 
+    let gated_issues = if let Some(elo) = player_elo {
+        let concepts = crate::eval::concepts::extract_concepts(groups, if us.is_white() { "white" } else { "black" });
+        crate::eval::concepts::rank_issues_for_position(&concepts, elo)
+    } else { Vec::new() };
+
     SensorReport {
         fen: fen.to_string(),
         state_id,
@@ -2751,16 +2756,18 @@ pub fn build_sensor_report(board: &shakmaty::Board, fen: &str, groups: &EvalGrou
         },
         evaluated_forks,
         exchanges,
+        gated_issues,
     }
 }
 
 pub fn analyze_fen(fen: &str) -> Result<PositionRecord> {
-    analyze_fen_with_engine_score(fen, None)
+    analyze_fen_with_engine_score(fen, None, None)
 }
 
 pub fn analyze_fen_with_engine_score(
     fen: &str,
     engine_score: Option<i64>,
+    player_elo: Option<i32>,
 ) -> Result<PositionRecord> {
     let parsed = Fen::from_ascii(fen.as_bytes()).context("invalid FEN")?;
     let chess: Chess = parsed
@@ -2772,7 +2779,7 @@ pub fn analyze_fen_with_engine_score(
     let phase = compute_phase(chess.board());
     let legal_move_count = chess.legal_moves().len();
     let groups = compute_groups(&chess, phase, legal_move_count);
-    let sensor_report = build_sensor_report(chess.board(), fen, &groups, &chess, phase);
+    let sensor_report = build_sensor_report(chess.board(), fen, &groups, &chess, phase, player_elo);
     let final_score = sum_groups(&groups);
     let delta = engine_score.map(|score| final_score - score);
     let sum_groups_match = delta.map(|d| d == 0).unwrap_or(true);

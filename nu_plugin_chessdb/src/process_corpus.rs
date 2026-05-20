@@ -224,7 +224,7 @@ impl PluginCommand for ProcessCorpus {
             .par_iter()
             .map(|fe| {
                 let (hugm_score, hugm_eval_arr, state_id) =
-                    match analyze_fen_with_engine_score(&fe.fen, None) {
+                    match analyze_fen_with_engine_score(&fe.fen, None, None) {
                         Ok(rec) => {
                             let sid = rec.sensor_report.state_id;
                             let arr = vec![
