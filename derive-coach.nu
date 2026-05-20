@@ -23,7 +23,7 @@ def main [username: string, --db: string, --min-games: int = 10] {
 
     # Query all moves for this player with FEN, score, and pre-computed state_id
     let rows = (open $db | query db "
-        SELECT m.game_id, m.ply, p.fen, p.hugm_score, p.state_id,
+        SELECT m.game_id, m.ply, p.fen, p.hugm_score,
                CASE WHEN m.color = 'white' THEN g.white ELSE g.black END as player
         FROM moves m
         JOIN positions p ON m.next_position_id = p.zobrist

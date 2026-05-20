@@ -2731,6 +2731,7 @@ pub fn build_sensor_report(board: &shakmaty::Board, fen: &str, groups: &EvalGrou
             fen: fen.to_string(), state_id: 0,
             material: material.clone(), tactical: tactical.clone(), positional: positional.clone(),
             aggregated: AggregatedScores::default(),
+            evaluated_forks: evaluated_forks.clone(),
             ..Default::default()
         };
         crate::eval::concepts::encode_state(&tmp, groups, phase).state_id

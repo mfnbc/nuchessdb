@@ -235,7 +235,7 @@ pub fn encode_state(sensor: &crate::eval::sensor::SensorReport, groups: &crate::
     let material_sign: i8 = if mat > 300 { 2 } else if mat > 100 { 1 }
         else if mat < -300 { -2 } else if mat < -100 { -1 } else { 0 };
 
-    let has_fork = !sensor.tactical.forks.is_empty();
+    let has_fork = !sensor.tactical.forks.is_empty() || !sensor.evaluated_forks.is_empty();
     let has_pin = !sensor.tactical.pins.is_empty();
     let has_hanging = !sensor.tactical.hanging.is_empty();
     let king_exposed = sensor.positional.king_exposure.as_ref()
