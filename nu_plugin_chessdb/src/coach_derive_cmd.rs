@@ -47,7 +47,7 @@ impl PluginCommand for DeriveCoachSignals {
     }
 }
 
-struct MoveRecord { game_id: String, ply: i64, fen: String, hugm_score: i64, player: String, state_id: Option<u16> }
+struct MoveRecord { game_id: String, ply: i64, fen: String, hugm_score: i64, player: String, color: String, state_id: Option<u16> }
 
 fn parse_move_record(v: &Value) -> Option<MoveRecord> {
     let rec = v.as_record().ok()?;
@@ -55,6 +55,7 @@ fn parse_move_record(v: &Value) -> Option<MoveRecord> {
         .and_then(|v| v.as_int().ok())
         .unwrap_or(0) as i64;
     let player = rec.get("player").and_then(|v| v.as_str().ok()).unwrap_or("unknown").to_string();
+    let color = rec.get("color").and_then(|v| v.as_str().ok()).unwrap_or("unknown").to_string();
     let state_id = rec.get("state_id").and_then(|v| v.as_int().ok()).map(|x| x as u16);
     Some(MoveRecord {
         game_id: format!("{}", rec.get("game_id")?.as_int().ok()?),
@@ -62,6 +63,7 @@ fn parse_move_record(v: &Value) -> Option<MoveRecord> {
         fen: rec.get("fen")?.as_str().ok()?.to_string(),
         hugm_score,
         player,
+        color,
         state_id,
     })
 }
@@ -204,9 +206,10 @@ fn detect_anomalies(rows: &[MoveRecord], states: &[Value], baselines: &HashMap<(
             if let Some((mean, std)) = baselines.get(&key) {
                 let z = (delta - mean) / std;
                 if z > 2.0 {
-                    // For the player: if they're White, positive = good. If Black, negative = good.
-                    let hurt_player = (row.player == "white" && signed_delta < 0)
-                        || (row.player == "black" && signed_delta > 0);
+                    // If the moving side is White and score dropped → hurt.
+                    // If the moving side is Black and score rose → hurt (White gained).
+                    let hurt_player = (row.color == "white" && signed_delta < 0)
+                        || (row.color == "black" && signed_delta > 0);
                     results.push(Value::record(nu_protocol::record! {
                         "player" => Value::string(&row.player, span),
                         "game_id" => Value::string(&row.game_id, span),
