@@ -132,8 +132,7 @@ def main [username: string, --db: string, --limit: int = 100] {
                         let step_sq = ($step | get square)
                         let d = ($actual_dests | get ($i - 1))
                         let match = if ($d | is-not-empty) and ($d == $step_sq) { true } else { false }
-                        if $match
-                            { $steps_done = $steps_done + 1 } else { break }
+                        if $match { $steps_done = $steps_done + 1 } else { break }
                     }
 
                     if $see_cp > 0.0 {
