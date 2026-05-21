@@ -56,7 +56,7 @@ def main [username: string, --db: string, --examples: int = 3] {
         WHERE g.white = ? OR g.black = ?
     " --params [$username, $username] | first | get cnt)
 
-    # ── Phase profile ──
+    # ── Phase profile: material imbalance per phase ──
     let phase_profile = if ($phase_baselines | is-not-empty) {
         $phase_baselines | reduce -f {} {|row, acc|
             let name = match ($row.bucket | into int) {
