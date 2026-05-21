@@ -149,10 +149,11 @@ fn compute_baselines(rows: &[MoveRecord], states: &[Value]) -> HashMap<(String, 
     for (i, row) in rows.iter().enumerate() {
         let phase_bucket = states.get(i).and_then(|v| get_field_i64(v, "phase_bucket")).unwrap_or(1) as u8;
         let game_key = (row.player.clone(), row.game_id.clone());
-        let delta = if let Some(prev) = prev_score.get(&game_key) {
-            (row.hugm_score - prev).abs() as f64
-        } else { 0.0 };
-        prev_score.insert(game_key, row.hugm_score);
+        let (delta, _signed_delta) = if let Some(prev) = prev_score.get(&game_key).copied() {
+            let sd = row.hugm_score - prev;
+            ((sd.abs() as f64), sd)
+        } else { (0.0, 0) };
+        prev_score.insert(game_key.clone(), row.hugm_score);
         if delta < 1.0 { continue; }
         // Always track overall eval swing
         baselines.entry((row.player.clone(), phase_bucket, "hugm_delta".into()))
@@ -181,10 +182,11 @@ fn detect_anomalies(rows: &[MoveRecord], states: &[Value], baselines: &HashMap<(
     let mut results = Vec::new();
     for (i, row) in rows.iter().enumerate() {
         let game_key = (row.player.clone(), row.game_id.clone());
-        let delta = if let Some(prev) = prev_score.get(&game_key) {
-            (row.hugm_score - prev).abs() as f64
-        } else { 0.0 };
-        prev_score.insert(game_key, row.hugm_score);
+        let (delta, signed_delta) = if let Some(prev) = prev_score.get(&game_key).copied() {
+            let sd = row.hugm_score - prev;
+            ((sd.abs() as f64), sd)
+        } else { (0.0, 0) };
+        prev_score.insert(game_key.clone(), row.hugm_score);
         if delta < 5.0 { continue; }
         let phase_bucket = states.get(i).and_then(|v| get_field_i64(v, "phase_bucket")).unwrap_or(1) as u8;
         let state_id = states.get(i).and_then(|v| get_field_i64(v, "state_id")).unwrap_or(0);
@@ -202,6 +204,9 @@ fn detect_anomalies(rows: &[MoveRecord], states: &[Value], baselines: &HashMap<(
             if let Some((mean, std)) = baselines.get(&key) {
                 let z = (delta - mean) / std;
                 if z > 2.0 {
+                    // For the player: if they're White, positive = good. If Black, negative = good.
+                    let hurt_player = (row.player == "white" && signed_delta < 0)
+                        || (row.player == "black" && signed_delta > 0);
                     results.push(Value::record(nu_protocol::record! {
                         "player" => Value::string(&row.player, span),
                         "game_id" => Value::string(&row.game_id, span),
@@ -211,6 +216,8 @@ fn detect_anomalies(rows: &[MoveRecord], states: &[Value], baselines: &HashMap<(
                         "concept_name" => Value::string(*concept, span),
                         "z_score" => Value::float(z, span),
                         "severity" => Value::float(delta, span),
+                        "signed_delta" => Value::float(signed_delta as f64, span),
+                        "hurt_player" => Value::bool(hurt_player, span),
                     }, span));
                 }
             }

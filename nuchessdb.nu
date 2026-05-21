@@ -352,7 +352,7 @@ def coach-review-game [game_id: int, --perspective: string = "white"] {
 
     # 2. Check for recorded anomalies first
     let anomalies = (open $db | query db "
-        SELECT ply, anomaly_type, concept_name, z_score, severity, state_id
+        SELECT ply, anomaly_type, concept_name, z_score, severity, signed_delta, hurt_player, state_id
         FROM move_anomalies
         WHERE username = ? AND game_id = ? AND consumed = 0
         ORDER BY severity DESC LIMIT 3
@@ -432,7 +432,9 @@ def coach-review-game [game_id: int, --perspective: string = "white"] {
             fen: $fen_record.fen,
             anomaly: (if ($anomaly_info | is-not-empty) {
                 { type: $anomaly_info.anomaly_type, concept: $anomaly_info.concept_name,
-                  z_score: ($anomaly_info.z_score | into float), severity: ($anomaly_info.severity | into int) }
+                  z_score: ($anomaly_info.z_score | into float), severity: ($anomaly_info.severity | into int),
+                  signed_delta: ($anomaly_info.signed_delta | default 0 | into int),
+                  hurt_player: ($anomaly_info.hurt_player | default false | into bool) }
             } else { null }),
             concepts: $concepts,
             coach: $coach,
