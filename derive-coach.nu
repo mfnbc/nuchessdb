@@ -61,7 +61,7 @@ def main [username: string, --db: string, --min-games: int = 10] {
     if ($signals.anomalies | length) > 0 {
         $signals.anomalies
         | select player game_id ply state_id anomaly_type concept_name z_score severity signed_delta hurt_player
-        | rename username --column player
+        | rename player username
         | insert consumed { false }
         | insert created_at { (date now | format date "%Y-%m-%dT%H:%M:%SZ") }
         | into sqlite $db -t move_anomalies
