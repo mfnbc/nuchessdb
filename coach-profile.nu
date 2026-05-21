@@ -18,10 +18,17 @@ def main [username: string, --db: string, --examples: int = 3] {
 
     # ── Queries ──
     let phase_baselines = (open $db | query db "
-        SELECT phase_bucket, mean, m2, count
-        FROM player_baselines WHERE username = ? AND concept_name = 'hugm_delta'
-        ORDER BY phase_bucket
-    " --params [$username])
+        SELECT ms.phase_bucket as bucket,
+               AVG(ABS(p.hugm_score)) as mean_swing,
+               COUNT(*) as position_count
+        FROM moves m
+        JOIN positions p ON m.next_position_id = p.zobrist
+        JOIN games g ON m.game_id = g.game_id
+        JOIN move_states ms ON m.game_id = ms.game_id AND m.ply = ms.ply
+        WHERE (g.white = ? OR g.black = ?)
+          AND (m.color = 'white' AND g.white = ? OR m.color = 'black' AND g.black = ?)
+        GROUP BY ms.phase_bucket ORDER BY ms.phase_bucket
+    " --params [$username, $username, $username, $username])
 
     let concept_baselines = (open $db | query db "
         SELECT concept_name, phase_bucket, mean, m2, count
@@ -52,14 +59,10 @@ def main [username: string, --db: string, --examples: int = 3] {
     # ── Phase profile ──
     let phase_profile = if ($phase_baselines | is-not-empty) {
         $phase_baselines | reduce -f {} {|row, acc|
-            let name = match ($row.phase_bucket | into int) {
+            let name = match ($row.bucket | into int) {
                 0 => "endgame", 1 => "late_mid", 2 => "midgame", _ => "opening"
             }
-            let sd = if $row.count > 1 {
-                let v = ($row.m2 | into float) / (($row.count - 1) | into float)
-                if $v > 0.0 { $v | math sqrt | math round --precision 0 } else { 0.0 }
-            } else { 0.0 }
-            $acc | insert $name { n: $row.count, mean_swing_cp: ($row.mean | math round --precision 0), std_swing_cp: $sd }
+            $acc | insert $name { n: $row.position_count, avg_abs_material_cp: ($row.mean_swing | math round --precision 0) }
         }
     } else { {} }
 
