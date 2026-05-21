@@ -33,7 +33,7 @@ def main [username: string, --db: string, --examples: int = 3] {
     " --params [$username, $username, $username, $username])
 
     let concept_baselines = (open $db | query db "
-        SELECT concept_name, phase_bucket, mean, m2, count
+        SELECT concept_name, phase_bucket, mean, std
         FROM player_baselines WHERE username = ? AND concept_name != 'hugm_delta'
         ORDER BY concept_name, phase_bucket
     " --params [$username])
@@ -80,9 +80,8 @@ def main [username: string, --db: string, --examples: int = 3] {
         $concept_baselines
         | group-by concept_name
         | items {|name, rows|
-            let total = ($rows | get count | math sum)
-            let wsum = ($rows | each {|r| ($r.mean | into float) * ($r.count | into float) } | math sum)
-            let avg = if $total > 0 { ($wsum / ($total | into float) | math round --precision 0) } else { 0.0 }
+            let total = ($rows | length)
+            let avg = ($rows | get mean | math avg | math round --precision 0)
             { concept: $name, occurrences: $total, avg_severity: $avg }
         }
         | sort-by occurrences --reverse
