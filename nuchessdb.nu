@@ -348,11 +348,9 @@ def coach-review-game [game_id: int, --perspective: string = "white"] {
     " --params [$game_id] | first)
 
     let player_elo = if $perspective == "white" { $game.white_elo } else { $game.black_elo }
-    print $"Reviewing game ($game_id): ($game.white) vs ($game.black)"
-    print $"Perspective: ($perspective) ELO: ($player_elo)"
+    let player_name = if $perspective == "white" { $game.white } else { $game.black }
 
     # 2. Check for recorded anomalies first
-    let player_name = if $perspective == "white" { $game.white } else { $game.black }
     let anomalies = (open $db | query db "
         SELECT ply, anomaly_type, concept_name, z_score, severity, state_id
         FROM move_anomalies
@@ -360,10 +358,9 @@ def coach-review-game [game_id: int, --perspective: string = "white"] {
         ORDER BY severity DESC LIMIT 3
     " --params [$player_name, $game_id])
 
-    # Get ply list from anomalies or eval drops
+    # Get unique ply list from anomalies or eval drops
     let plies = if ($anomalies | length) > 0 {
-        print $"  Found ($anomalies | length) anomalies for ($player_name) in this game"
-        $anomalies | get ply
+        $anomalies | get ply | uniq
     } else {
         # Fall back to eval drops
         let moves = (review-game $game_id)
@@ -381,8 +378,8 @@ def coach-review-game [game_id: int, --perspective: string = "white"] {
         $worst | get ply
     }
 
-    # 3. For each interesting ply, get the position BEFORE the move
-    for ply in $plies {
+    # 3. For each interesting ply, build structured review
+    let reviews = ($plies | each {|ply|
         let ply = ($ply | into int)
 
         # Get FEN of the position BEFORE the move was played (what the player saw)
@@ -393,11 +390,7 @@ def coach-review-game [game_id: int, --perspective: string = "white"] {
         " --params [$game_id, $ply] | first)
 
         let anomaly_info = ($anomalies | where ply == $ply | first)
-        if ($anomaly_info | is-not-empty) {
-            print $"\n── Ply ($ply) — ANOMALY: ($anomaly_info.anomaly_type) z=($anomaly_info.z_score | into string --decimals 2) severity=($anomaly_info.severity)cp ──"
-        } else {
-            print $"\n── Ply ($ply) — Eval dropped ──"
-        }
+        # Include anomaly info for structured output (no text headers)
 
         # 4. Run full sensor pipeline
         let eval = ($fen_record.fen | chessdb hugm-eval --verbose true --player-elo $player_elo)
@@ -415,34 +408,45 @@ def coach-review-game [game_id: int, --perspective: string = "white"] {
             }}
         } else { [] }
 
-        if ($concepts | is-empty) {
-            print "  No tactical concepts detected in this position."
-            continue
-        }
-
-        # 6. Format for coach contract (concepts now include natural-language phrases)
+        # 6. Format for coach contract
         let coach_input = {
-            fen: $fen_record.fen,
-            player_elo: $player_elo,
-            concepts: $concepts,
-            scores: $report.aggregated,
+            fen: $fen_record.fen, player_elo: $player_elo,
+            concepts: $concepts, scores: $report.aggregated,
             chaos: $report.aggregated.chaos,
         }
 
-        # 7. Call nu-agent CLI (canonical entry point — handles config cascade)
+        # 7. Call nu-agent CLI
         let agent_path = "../nu-agent/nu-agent"
         let contract_path = "../nu-agent/contracts/chess_coach.toml"
-        let coach_json = (nu $agent_path --prompt ($coach_input | to json -r) --contract $contract_path | str trim)
+        let coach_raw = if ($concepts | is-not-empty) {
+            (nu $agent_path --prompt ($coach_input | to json -r) --contract $contract_path | str trim)
+        } else { "" }
 
-        if ($coach_json | str starts-with "```") {
-            # Strip markdown code fences
-            let stripped = ($coach_json | str replace -r '^```(json)?\n' '' | str replace -r '\n```$' '')
-            let coach = ($stripped | from json)
-            print $"  ($coach.socratic_question)"
-        } else {
-            print $"  Coach output: ($coach_json)"
+        let coach = if ($coach_raw | is-not-empty) {
+            let cleaned = ($coach_raw | str replace -r '^```(json)?\s*\n?' '' | str replace -r '\n?```\s*$' '')
+            try { $cleaned | from json } catch { $coach_raw }
+        } else { null }
+
+        {
+            ply: $ply,
+            fen: $fen_record.fen,
+            anomaly: (if ($anomaly_info | is-not-empty) {
+                { type: $anomaly_info.anomaly_type, concept: $anomaly_info.concept_name,
+                  z_score: ($anomaly_info.z_score | into float), severity: ($anomaly_info.severity | into int) }
+            } else { null }),
+            concepts: $concepts,
+            coach: $coach,
         }
+    })
+
+    let summary = {
+        game_id: $game_id, white: $game.white, black: $game.black,
+        white_elo: $game.white_elo, black_elo: $game.black_elo,
+        perspective: $perspective, player_elo: $player_elo,
+        player_name: $player_name, anomaly_count: ($anomalies | length),
+        reviews: $reviews,
     }
+    print ($summary | to json -r)
 }
 
 # --- 4. Main Interface ---
