@@ -18,16 +18,18 @@ def main [username: string, --db: string, --examples: int = 3] {
 
     # ── Queries ──
     let phase_baselines = (open $db | query db "
-        SELECT ms.phase_bucket as bucket,
-               AVG(ABS(p.hugm_score)) as mean_swing,
-               COUNT(*) as position_count
+        SELECT m.color,
+               ms.phase_bucket as bucket,
+               COUNT(*) as n,
+               AVG(CASE WHEN m.color='white' THEN p.hugm_score ELSE -p.hugm_score END) as score_from_player,
+               AVG(ABS(p.hugm_score)) as abs_material
         FROM moves m
         JOIN positions p ON m.next_position_id = p.zobrist
         JOIN games g ON m.game_id = g.game_id
         JOIN move_states ms ON m.game_id = ms.game_id AND m.ply = ms.ply
         WHERE (g.white = ? OR g.black = ?)
           AND (m.color = 'white' AND g.white = ? OR m.color = 'black' AND g.black = ?)
-        GROUP BY ms.phase_bucket ORDER BY ms.phase_bucket
+        GROUP BY m.color, ms.phase_bucket ORDER BY m.color, ms.phase_bucket
     " --params [$username, $username, $username, $username])
 
     let concept_baselines = (open $db | query db "
@@ -56,13 +58,20 @@ def main [username: string, --db: string, --examples: int = 3] {
         WHERE g.white = ? OR g.black = ?
     " --params [$username, $username] | first | get cnt)
 
-    # ── Phase profile: material imbalance per phase ──
+    # ── Phase profile: material by color and phase (from player's perspective) ──
     let phase_profile = if ($phase_baselines | is-not-empty) {
         $phase_baselines | reduce -f {} {|row, acc|
             let name = match ($row.bucket | into int) {
                 0 => "endgame", 1 => "late_mid", 2 => "midgame", _ => "opening"
             }
-            $acc | insert $name { n: $row.position_count, avg_abs_material_cp: ($row.mean_swing | math round --precision 0) }
+            let color_key = $"as_($row.color)"
+            let entry = if ($acc | get -o $name) == null { {} } else { $acc | get $name }
+            let new_entry = ($entry | upsert $color_key {
+                n: $row.n,
+                avg_score_cp: ($row.score_from_player | math round --precision 0),
+                avg_abs_material_cp: ($row.abs_material | math round --precision 0)
+            })
+            $acc | upsert $name $new_entry
         }
     } else { {} }
 
