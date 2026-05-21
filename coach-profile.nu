@@ -59,7 +59,7 @@ def main [username: string, --db: string, --examples: int = 3] {
                 let v = ($row.m2 | into float) / (($row.count - 1) | into float)
                 if $v > 0.0 { $v | math sqrt | math round --precision 0 } else { 0.0 }
             } else { 0.0 }
-            $acc | insert $name { mean_cp: ($row.mean | math round --precision 0), std_cp: $sd }
+            $acc | insert $name { n: $row.count, mean_swing_cp: ($row.mean | math round --precision 0), std_swing_cp: $sd }
         }
     } else { {} }
 
