@@ -60,8 +60,22 @@ def main [username: string, --db: string, --min-games: int = 10] {
     # Insert anomalies
     if ($signals.anomalies | length) > 0 {
         $signals.anomalies
-        | select player game_id ply state_id anomaly_type concept_name z_score severity signed_delta hurt_player
-        | each {|r| $r | insert username $r.player | reject player | insert consumed false | insert created_at (date now | format date "%Y-%m-%dT%H:%M:%SZ") }
+        | each {|r|
+            {
+                username: $r.player,
+                game_id: $r.game_id,
+                ply: $r.ply,
+                state_id: $r.state_id,
+                anomaly_type: $r.anomaly_type,
+                concept_name: $r.concept_name,
+                z_score: $r.z_score,
+                severity: $r.severity,
+                signed_delta: $r.signed_delta,
+                hurt_player: $r.hurt_player,
+                consumed: false,
+                created_at: (date now | format date "%Y-%m-%dT%H:%M:%SZ")
+            }
+        }
         | into sqlite $db -t move_anomalies
         | ignore
     }
