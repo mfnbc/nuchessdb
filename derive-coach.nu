@@ -40,7 +40,10 @@ def main [username: string, --db: string, --min-games: int = 10] {
     print --stderr $"Deriving coach signals for ($username) from ($rows | length) moves..."
 
     # Run the Rust batch plugin: Welford + z-score + state transitions
-    let signals = ($rows | chessdb derive-coach-signals --min-games $min_games)
+    let signals = try { ($rows | chessdb derive-coach-signals --min-games $min_games) } catch {|e|
+        print --stderr $"Plugin error: ($e.msg)"
+        return
+    }
 
     # Insert baselines — Welford states (mean, m2, count) per concept per phase
     if ($signals.baselines | length) > 0 {
@@ -58,8 +61,9 @@ def main [username: string, --db: string, --min-games: int = 10] {
     }
 
     # Insert anomalies
-    if ($signals.anomalies | length) > 0 {
-        $signals.anomalies
+    let anomaly_list = try { $signals.anomalies } catch { [] }
+    if ($anomaly_list | length) > 0 {
+        $anomaly_list
         | each {|r|
             {
                 username: $r.player,
