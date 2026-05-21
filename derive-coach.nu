@@ -66,16 +66,16 @@ def main [username: string, --db: string, --min-games: int = 10] {
         $anomaly_list
         | each {|r|
             {
-                username: $r.player,
-                game_id: $r.game_id,
-                ply: $r.ply,
-                state_id: $r.state_id,
-                anomaly_type: $r.anomaly_type,
-                concept_name: $r.concept_name,
-                z_score: $r.z_score,
-                severity: $r.severity,
-                signed_delta: $r.signed_delta,
-                hurt_player: $r.hurt_player,
+                username: ($r.player | into string),
+                game_id: ($r.game_id | into int),
+                ply: ($r.ply | into int),
+                state_id: ($r.state_id | into int),
+                anomaly_type: ($r.anomaly_type | into string),
+                concept_name: ($r.concept_name | into string),
+                z_score: ($r.z_score | into float),
+                severity: ($r.severity | into float),
+                signed_delta: ($r.signed_delta | into int),
+                hurt_player: ($r.hurt_player | into int),
                 consumed: false,
                 created_at: (date now | format date "%Y-%m-%dT%H:%M:%SZ")
             }
