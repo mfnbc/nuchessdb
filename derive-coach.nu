@@ -45,43 +45,51 @@ def main [username: string, --db: string, --min-games: int = 10] {
         return
     }
 
-    # Insert baselines — Welford states (mean, m2, count) per concept per phase
-    if ($signals.baselines | length) > 0 {
-        # Delete existing rows for this user to avoid duplicates (upsert)
+    # Insert baselines — explicit INSERT to avoid into sqlite schema mismatch
+    let baseline_list = try { $signals.baselines } catch { [] }
+    if ($baseline_list | length) > 0 {
         try { open $db | query db "DELETE FROM player_baselines" } catch { }
-        $signals.baselines
-        | rename username phase_bucket concept_name mean std
-        | insert count { 1 }
-        | insert m2 {|r| if $r.count > 1 { ($r.std * $r.std * (($r.count - 1) | into float)) } else { 0.0 } }
-        | insert last_updated { (date now | format date "%Y-%m-%dT%H:%M:%SZ") }
-        | select username concept_name phase_bucket mean m2 count last_updated
-        | uniq-by username concept_name phase_bucket
-        | into sqlite $db -t player_baselines
-        | ignore
+        for r in ($baseline_list | uniq-by username concept_name phase_bucket) {
+            try {
+                open $db | query db "
+                    INSERT INTO player_baselines (username, concept_name, phase_bucket, mean, m2, count, last_updated)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                " --params [
+                    ($r.username | into string),
+                    ($r.concept_name | into string),
+                    ($r.phase_bucket | into int),
+                    ($r.mean | into float),
+                    (0.0),
+                    1,
+                    (date now | format date "%Y-%m-%dT%H:%M:%SZ")
+                ] | ignore
+            } catch {|e| print --stderr $"Insert baseline failed: ($e.msg)" }
+        }
     }
 
-    # Insert anomalies
+    # Insert anomalies — explicit INSERT for schema stability
     let anomaly_list = try { $signals.anomalies } catch { [] }
-    if ($anomaly_list | length) > 0 {
-        $anomaly_list
-        | each {|r|
-            {
-                username: ($r.player | into string),
-                game_id: ($r.game_id | into int),
-                ply: ($r.ply | into int),
-                state_id: ($r.state_id | into int),
-                anomaly_type: ($r.anomaly_type | into string),
-                concept_name: ($r.concept_name | into string),
-                z_score: ($r.z_score | into float),
-                severity: ($r.severity | into float),
-                signed_delta: ($r.signed_delta | into int),
-                hurt_player: ($r.hurt_player | into int),
-                consumed: false,
-                created_at: (date now | format date "%Y-%m-%dT%H:%M:%SZ")
-            }
-        }
-        | into sqlite $db -t move_anomalies
-        | ignore
+    for r in $anomaly_list {
+        try {
+            open $db | query db "
+                INSERT INTO move_anomalies
+                    (username, game_id, ply, state_id, anomaly_type, concept_name, z_score, severity, signed_delta, hurt_player, consumed, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            " --params [
+                ($r.player | into string),
+                ($r.game_id | into int),
+                ($r.ply | into int),
+                ($r.state_id | into int),
+                ($r.anomaly_type | into string),
+                ($r.concept_name | into string),
+                ($r.z_score | into float),
+                ($r.severity | into float),
+                ($r.signed_delta | into int),
+                ($r.hurt_player | into int),
+                false,
+                (date now | format date "%Y-%m-%dT%H:%M:%SZ")
+            ] | ignore
+        } catch {|e| print --stderr $"Insert anomaly failed: ($e.msg)" }
     }
 
     # Insert transitions with per-player deduplication
