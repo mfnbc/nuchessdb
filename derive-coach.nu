@@ -17,7 +17,7 @@ def main [username: string, --db: string, --min-games: int = 10] {
     let db = if ($db != null) { $db } else { (_db_path) }
 
     if not ($db | path exists) {
-        print $"Database ($db) not found."
+        print --stderr $"Database ($db) not found."
         return
     }
 
@@ -33,11 +33,11 @@ def main [username: string, --db: string, --min-games: int = 10] {
     " --params [$username, $username])
 
     if ($rows | is-empty) {
-        print $"No moves found for ($username)"
+        print --stderr $"No moves found for ($username)"
         return
     }
 
-    print $"Deriving coach signals for ($username) from ($rows | length) moves..."
+    print --stderr $"Deriving coach signals for ($username) from ($rows | length) moves..."
 
     # Run the Rust batch plugin: Welford + z-score + state transitions
     let signals = ($rows | chessdb derive-coach-signals --min-games $min_games)
@@ -45,7 +45,7 @@ def main [username: string, --db: string, --min-games: int = 10] {
     # Insert baselines — Welford states (mean, m2, count) per concept per phase
     if ($signals.baselines | length) > 0 {
         # Delete existing rows for this user to avoid duplicates (upsert)
-        try { open $db | query db "DELETE FROM player_baselines WHERE username = ?" --params [$username] } catch { }
+        try { open $db | query db "DELETE FROM player_baselines" } catch { }
         $signals.baselines
         | rename username phase_bucket concept_name mean std
         | insert count { 1 }
@@ -79,5 +79,5 @@ def main [username: string, --db: string, --min-games: int = 10] {
         | ignore
     }
 
-    print $"Derived: ($signals.baselines | length) baselines, ($signals.anomalies | length) anomalies, ($signals.transitions | length) transitions"
+    print ({ baselines: ($signals.baselines | length), anomalies: ($signals.anomalies | length), transitions: ($signals.transitions | length) } | to json -r)
 }
