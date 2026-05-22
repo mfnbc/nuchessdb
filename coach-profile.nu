@@ -131,6 +131,16 @@ def main [username: string, --db: string, --examples: int = 3] {
         " --params [$username])
     } else { [] }
 
+    let anomaly_split_by_color = if $anomaly_count > 0 {
+        (open $db | query db "
+            SELECT m.color, ma.hurt_player, COUNT(*) as cnt
+            FROM move_anomalies ma
+            JOIN moves m ON ma.game_id = m.game_id AND ma.ply = m.ply
+            WHERE ma.username = ? AND ma.consumed = 0
+            GROUP BY m.color, ma.hurt_player
+        " --params [$username])
+    } else { [] }
+
     # ── Concept examples ──
     let concept_examples = if ($examples > 0) and ($concepts | length) > 0 {
         let top_names = ($concepts | first 3 | get concept)
@@ -168,6 +178,11 @@ def main [username: string, --db: string, --examples: int = 3] {
             hurt_player: ($a.hp | default 0 | into bool)
         }}),
         anomaly_split: ($anomaly_split | each {|r| {
+            hurt_player: ($r.hurt_player | into bool),
+            count: ($r.cnt | into int)
+        }}),
+        anomaly_split_by_color: ($anomaly_split_by_color | each {|r| {
+            color: ($r.color | into string),
             hurt_player: ($r.hurt_player | into bool),
             count: ($r.cnt | into int)
         }}),
