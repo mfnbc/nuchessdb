@@ -40,10 +40,10 @@ def main [username: string, --db: string, --examples: int = 3] {
         ORDER BY concept_name, phase_bucket
     " --params [$username])
 
-    let anomaly_count = (open $db | query db "
+    let anomaly_count = ((open $db | query db "
         SELECT COUNT(*) as cnt FROM move_anomalies
         WHERE username = ? AND consumed = 0
-    " --params [$username] | first | get cnt)
+    " --params [$username] | first | get cnt) | into int)
 
     let positional_raw = (open $db | query db "
         SELECT m.color,
@@ -114,7 +114,7 @@ def main [username: string, --db: string, --examples: int = 3] {
     } else { [] }
 
     # ── Anomalies ──
-    let anomalies = if $anomaly_count > 0 {
+    let anomalies = if ($anomaly_count | into int) == 0 {
         (open $db | query db "
             SELECT ma.game_id, ma.ply, ROUND(MAX(ma.z_score),2) as z, ROUND(MAX(ma.severity),0) as sev,
                    MAX(ma.signed_delta) as sd, MAX(ma.hurt_player) as hp,
@@ -126,15 +126,15 @@ def main [username: string, --db: string, --examples: int = 3] {
         " --params [$username])
     } else { [] }
 
-    let anomaly_split = if $anomaly_count > 0 {
+    let anomaly_split = if (($anomaly_count | into int) == 0) { [] } else {
         (open $db | query db "
             SELECT hurt_player, COUNT(*) as cnt
             FROM move_anomalies WHERE username = ? AND consumed = 0
             GROUP BY hurt_player
         " --params [$username])
-    } else { [] }
+    }
 
-    let anomaly_split_by_color = if $anomaly_count > 0 {
+    let anomaly_split_by_color = if ($anomaly_count | into int) == 0 {
         (open $db | query db "
             SELECT m.color, ma.hurt_player, COUNT(*) as cnt
             FROM move_anomalies ma
@@ -144,13 +144,28 @@ def main [username: string, --db: string, --examples: int = 3] {
         " --params [$username])
     } else { [] }
 
-    let king_blunder_count = if $anomaly_count > 0 {
+    let king_blunder_count = if ($anomaly_count | into int) == 0 {
         (open $db | query db "
             SELECT COUNT(*) as cnt
             FROM move_anomalies ma
             JOIN move_states ms ON ma.game_id = ms.game_id AND ma.ply = ms.ply
             WHERE ma.username = ? AND ma.consumed = 0 AND ma.hurt_player = 1 AND ms.king_exposed = 1
         " --params [$username] | first | get cnt)
+    } else { 0 }
+
+    # Opponent blunders in this player's games (opportunities to capitalize)
+    let opponent_blunder_count = (open $db | query db "
+        SELECT COUNT(*) as cnt
+        FROM move_anomalies ma
+        WHERE ma.game_id IN (SELECT game_id FROM games WHERE white = ? OR black = ?)
+          AND ma.username != ? AND ma.consumed = 0 AND ma.hurt_player = 1
+    " --params [$username, $username, $username] | first | get cnt)
+
+    let capitalized = if ($anomaly_split | is-not-empty) {
+        ($anomaly_split | where {|r| not $r.hurt_player } | first | get count)
+    } else { 0 }
+    let missed = if $opponent_blunder_count > $capitalized {
+        $opponent_blunder_count - $capitalized
     } else { 0 }
 
     # ── Concept examples ──
@@ -195,6 +210,7 @@ def main [username: string, --db: string, --examples: int = 3] {
             count: ($r.cnt | into int)
         }}),
         king_blunder_count: $king_blunder_count,
+        capitalization: { opponent_blunders: $opponent_blunder_count, you_capitalized: $capitalized, you_missed: $missed },
         anomaly_split_by_color: ($anomaly_split_by_color | each {|r| {
             color: ($r.color | into string),
             hurt_player: ($r.hurt_player | into bool),
