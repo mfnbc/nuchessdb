@@ -16,6 +16,8 @@ struct PendingPos {
     hugm_score: i64,
     hugm_eval_arr: String,
     state_id: u16,
+    mate_in_1: i64,
+    is_checkmate: i64,
 }
 
 /// Lightweight FEN entry collected during game parsing.
@@ -223,10 +225,12 @@ impl PluginCommand for ProcessCorpus {
         let eval_results: Vec<PendingPos> = fens_to_eval
             .par_iter()
             .map(|fe| {
-                let (hugm_score, hugm_eval_arr, state_id) =
+                let (hugm_score, hugm_eval_arr, state_id, mate_in_1, is_checkmate) =
                     match analyze_fen_with_engine_score(&fe.fen, None, None) {
                         Ok(rec) => {
                             let sid = rec.sensor_report.state_id;
+                            let mi1 = if rec.sensor_report.mate_in_1_exists { 1 } else { 0 };
+                            let cm = if rec.legal.is_checkmate { 1 } else { 0 };
                             let arr = vec![
                                 rec.groups.material.blended,
                                 rec.groups.pawn_structure.blended,
@@ -242,9 +246,9 @@ impl PluginCommand for ProcessCorpus {
                             ];
                             let json_str =
                                 serde_json::to_string(&arr).unwrap_or_else(|_| "[]".to_string());
-                            (rec.final_score, json_str, sid)
+                            (rec.final_score, json_str, sid, mi1, cm)
                         }
-                        Err(_) => (0, "[]".to_string(), 0u16),
+                        Err(_) => (0, "[]".to_string(), 0u16, 0, 0),
                     };
                 PendingPos {
                     zobrist: fe.zobrist.clone(),
@@ -253,6 +257,8 @@ impl PluginCommand for ProcessCorpus {
                     hugm_score,
                     hugm_eval_arr,
                     state_id,
+                    mate_in_1,
+                    is_checkmate,
                 }
             })
             .collect();
@@ -267,6 +273,8 @@ impl PluginCommand for ProcessCorpus {
                 "hugm_score" => Value::int(p.hugm_score, span),
                 "hugm_eval_arr" => Value::string(&p.hugm_eval_arr, span),
                 "state_id" => Value::int(p.state_id as i64, span),
+                "mate_in_1" => Value::int(p.mate_in_1, span),
+                "is_checkmate" => Value::int(p.is_checkmate, span),
             };
             out_positions.push(Value::record(pos_record, span));
         }

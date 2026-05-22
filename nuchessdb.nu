@@ -234,7 +234,7 @@ def import-records [games: list, platform: string, username: string] {
         }
         if ($corpus.positions | is-not-empty) {
             let attach = $"ATTACH '($temp_db)' AS src;"
-            sqlite3 $db $attach "INSERT OR IGNORE INTO positions(zobrist,fen,hugm_score,hugm_eval_arr,board_pieces,state_id) SELECT zobrist,fen,hugm_score,hugm_eval_arr,board_pieces,state_id FROM src.temp_positions; DETACH src;" | ignore
+            sqlite3 $db $attach "INSERT OR IGNORE INTO positions(zobrist,fen,hugm_score,hugm_eval_arr,board_pieces,state_id,mate_in_1,is_checkmate) SELECT zobrist,fen,hugm_score,hugm_eval_arr,board_pieces,state_id,mate_in_1,is_checkmate FROM src.temp_positions; DETACH src;" | ignore
         }
         if ($corpus.moves | is-not-empty) {
             let attach = $"ATTACH '($temp_db)' AS src;"
