@@ -95,10 +95,11 @@ def main [username: string, --db: string, --examples: int = 3] {
     let positional = if ($positional_raw | length) > 100 {
         $positional_raw | each {|r|
             let arr = try { $r.hugm_eval_arr | from json } catch { [] }
+            let raw_king = (if ($arr | length) > 3 { $arr | get 3 | into int } else { 0 })
             { color: $r.color, phase: $r.phase,
               pawns: (if ($arr | length) > 1 { $arr | get 1 | into int } else { 0 }),
               activity: (if ($arr | length) > 2 { $arr | get 2 | into int } else { 0 }),
-              king: (if ($arr | length) > 3 { $arr | get 3 | into int } else { 0 }) }
+              own_king_safety_cp: (if $r.color == "black" { -1 * $raw_king } else { $raw_king }) }
         }
         | group-by {|r| $"($r.color):($r.phase)"}
         | items {|key, group|
@@ -108,7 +109,7 @@ def main [username: string, --db: string, --examples: int = 3] {
               n: $n,
               pawns: (($group | get pawns | math sum) / ($n | into float) | math round --precision 1),
               activity: (($group | get activity | math sum) / ($n | into float) | math round --precision 1),
-              king: (($group | get king | math sum) / ($n | into float) | math round --precision 1) }
+              own_king_safety_cp: (($group | get own_king_safety_cp | math sum) / ($n | into float) | math round --precision 1) }
         }
     } else { [] }
 
