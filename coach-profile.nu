@@ -126,7 +126,7 @@ def main [username: string, --db: string, --examples: int = 3] {
         SELECT hurt_player, COUNT(*) as cnt
         FROM move_anomalies WHERE username = ? AND consumed = 0
         GROUP BY hurt_player
-    " --params [$username])
+    " --params [$username] | default [])
 
     let anomaly_split_by_color = (open $db | query db "
         SELECT m.color, ma.hurt_player, COUNT(*) as cnt
