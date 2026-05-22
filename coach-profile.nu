@@ -116,10 +116,13 @@ def main [username: string, --db: string, --examples: int = 3] {
     # ── Anomalies ──
     let anomalies = if $anomaly_count > 0 {
         (open $db | query db "
-            SELECT game_id, ply, ROUND(MAX(z_score),2) as z, ROUND(MAX(severity),0) as sev,
-                   MAX(signed_delta) as sd, MAX(hurt_player) as hp
-            FROM move_anomalies WHERE username = ? AND consumed = 0
-            GROUP BY game_id, ply ORDER BY sev DESC LIMIT 5
+            SELECT ma.game_id, ma.ply, ROUND(MAX(ma.z_score),2) as z, ROUND(MAX(ma.severity),0) as sev,
+                   MAX(ma.signed_delta) as sd, MAX(ma.hurt_player) as hp,
+                   MAX(CASE WHEN ms.king_exposed = 1 THEN 1 ELSE 0 END) as king_involved
+            FROM move_anomalies ma
+            LEFT JOIN move_states ms ON ma.game_id = ms.game_id AND ma.ply = ms.ply
+            WHERE ma.username = ? AND ma.consumed = 0
+            GROUP BY ma.game_id, ma.ply ORDER BY sev DESC LIMIT 5
         " --params [$username])
     } else { [] }
 
@@ -140,6 +143,15 @@ def main [username: string, --db: string, --examples: int = 3] {
             GROUP BY m.color, ma.hurt_player
         " --params [$username])
     } else { [] }
+
+    let king_blunder_count = if $anomaly_count > 0 {
+        (open $db | query db "
+            SELECT COUNT(*) as cnt
+            FROM move_anomalies ma
+            JOIN move_states ms ON ma.game_id = ms.game_id AND ma.ply = ms.ply
+            WHERE ma.username = ? AND ma.consumed = 0 AND ma.hurt_player = 1 AND ms.king_exposed = 1
+        " --params [$username] | first | get cnt)
+    } else { 0 }
 
     # ── Concept examples ──
     let concept_examples = if ($examples > 0) and ($concepts | length) > 0 {
@@ -175,12 +187,14 @@ def main [username: string, --db: string, --examples: int = 3] {
             game_id: ($a.game_id | into string), ply: $a.ply,
             z_score: $a.z, severity_cp: $a.sev,
             signed_delta: ($a.sd | default 0 | into int),
-            hurt_player: ($a.hp | default 0 | into bool)
+            hurt_player: ($a.hp | default 0 | into bool),
+            king_involved: ($a.king_involved | default 0 | into bool)
         }}),
         anomaly_split: ($anomaly_split | each {|r| {
             hurt_player: ($r.hurt_player | into bool),
             count: ($r.cnt | into int)
         }}),
+        king_blunder_count: $king_blunder_count,
         anomaly_split_by_color: ($anomaly_split_by_color | each {|r| {
             color: ($r.color | into string),
             hurt_player: ($r.hurt_player | into bool),
