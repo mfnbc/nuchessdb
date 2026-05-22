@@ -2780,7 +2780,12 @@ pub fn analyze_fen_with_engine_score(
     let phase = compute_phase(chess.board());
     let legal_move_count = chess.legal_moves().len();
     let groups = compute_groups(&chess, phase, legal_move_count);
-    let sensor_report = build_sensor_report(chess.board(), fen, &groups, &chess, phase, player_elo);
+    let mut sensor_report = build_sensor_report(chess.board(), fen, &groups, &chess, phase, player_elo);
+    sensor_report.mate_in_1_exists = chess.legal_moves().iter().any(|m| {
+        let mut c = chess.clone();
+        c.play_unchecked(m);
+        c.is_checkmate()
+    });
     let final_score = sum_groups(&groups);
     let delta = engine_score.map(|score| final_score - score);
     let sum_groups_match = delta.map(|d| d == 0).unwrap_or(true);
