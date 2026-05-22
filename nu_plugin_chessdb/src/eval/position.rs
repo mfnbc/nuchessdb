@@ -2758,6 +2758,7 @@ pub fn build_sensor_report(board: &shakmaty::Board, fen: &str, groups: &EvalGrou
         evaluated_forks,
         exchanges,
         gated_issues,
+        mate_in_1_exists: false,
     }
 }
 
