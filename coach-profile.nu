@@ -19,17 +19,19 @@ def main [username: string, --db: string, --examples: int = 3] {
     # ── Queries ──
     let phase_baselines = (open $db | query db "
         SELECT m.color,
-               ms.phase_bucket as bucket,
+               CASE WHEN m.ply <= 12 THEN 'opening'
+                    WHEN m.ply <= 30 THEN 'midgame'
+                    WHEN m.ply <= 50 THEN 'late_mid'
+                    ELSE 'endgame' END as phase,
                COUNT(*) as n,
                AVG(CASE WHEN m.color='white' THEN p.hugm_score ELSE -p.hugm_score END) as score_from_player,
                AVG(ABS(p.hugm_score)) as abs_material
         FROM moves m
         JOIN positions p ON m.next_position_id = p.zobrist
         JOIN games g ON m.game_id = g.game_id
-        JOIN move_states ms ON m.game_id = ms.game_id AND m.ply = ms.ply
         WHERE (g.white = ? OR g.black = ?)
           AND (m.color = 'white' AND g.white = ? OR m.color = 'black' AND g.black = ?)
-        GROUP BY m.color, ms.phase_bucket ORDER BY m.color, ms.phase_bucket
+        GROUP BY m.color, phase ORDER BY m.color, CASE phase WHEN 'opening' THEN 1 WHEN 'midgame' THEN 2 WHEN 'late_mid' THEN 3 ELSE 4 END
     " --params [$username, $username, $username, $username])
 
     let concept_baselines = (open $db | query db "
@@ -61,9 +63,7 @@ def main [username: string, --db: string, --examples: int = 3] {
     # ── Phase profile: material by color and phase (from player's perspective) ──
     let phase_profile = if ($phase_baselines | is-not-empty) {
         $phase_baselines | reduce -f {} {|row, acc|
-            let name = match ($row.bucket | into int) {
-                0 => "endgame", 1 => "late_mid", 2 => "midgame", _ => "opening"
-            }
+            let name = $row.phase
             let color_key = $"as_($row.color)"
             let entry = if ($acc | get -o $name) == null { {} } else { $acc | get $name }
             let new_entry = ($entry | upsert $color_key {
