@@ -92,8 +92,7 @@ def main [username: string, --db: string, --examples: int = 3] {
     } else { [] }
 
     # ── Positional components ──
-    let positional = if ($positional_raw | length) > 100 {
-        $positional_raw | each {|r|
+    let positional = $positional_raw | each {|r|
             let arr = try { $r.hugm_eval_arr | from json } catch { [] }
             let raw_king = (if ($arr | length) > 3 { $arr | get 3 | into int } else { 0 })
             { color: $r.color, phase: $r.phase,
@@ -111,47 +110,38 @@ def main [username: string, --db: string, --examples: int = 3] {
               activity: (($group | get activity | math sum) / ($n | into float) | math round --precision 1),
               own_king_safety_cp: (($group | get own_king_safety_cp | math sum) / ($n | into float) | math round --precision 1) }
         }
-    } else { [] }
 
     # ── Anomalies ──
-    let anomalies = if ($anomaly_count | into int) == 0 {
-        (open $db | query db "
-            SELECT ma.game_id, ma.ply, ROUND(MAX(ma.z_score),2) as z, ROUND(MAX(ma.severity),0) as sev,
-                   MAX(ma.signed_delta) as sd, MAX(ma.hurt_player) as hp,
-                   MAX(CASE WHEN ms.king_exposed = 1 THEN 1 ELSE 0 END) as king_involved
-            FROM move_anomalies ma
-            LEFT JOIN move_states ms ON ma.game_id = ms.game_id AND ma.ply = ms.ply
-            WHERE ma.username = ? AND ma.consumed = 0
-            GROUP BY ma.game_id, ma.ply ORDER BY sev DESC LIMIT 5
-        " --params [$username])
-    } else { [] }
+    let anomalies = (open $db | query db "
+        SELECT ma.game_id, ma.ply, ROUND(MAX(ma.z_score),2) as z, ROUND(MAX(ma.severity),0) as sev,
+               MAX(ma.signed_delta) as sd, MAX(ma.hurt_player) as hp,
+               MAX(CASE WHEN ms.king_exposed = 1 THEN 1 ELSE 0 END) as king_involved
+        FROM move_anomalies ma
+        LEFT JOIN move_states ms ON ma.game_id = ms.game_id AND ma.ply = ms.ply
+        WHERE ma.username = ? AND ma.consumed = 0
+        GROUP BY ma.game_id, ma.ply ORDER BY sev DESC LIMIT 5
+    " --params [$username])
 
-    let anomaly_split = if (($anomaly_count | into int) == 0) { [] } else {
-        (open $db | query db "
-            SELECT hurt_player, COUNT(*) as cnt
-            FROM move_anomalies WHERE username = ? AND consumed = 0
-            GROUP BY hurt_player
-        " --params [$username])
-    }
+    let anomaly_split = (open $db | query db "
+        SELECT hurt_player, COUNT(*) as cnt
+        FROM move_anomalies WHERE username = ? AND consumed = 0
+        GROUP BY hurt_player
+    " --params [$username])
 
-    let anomaly_split_by_color = if ($anomaly_count | into int) == 0 {
-        (open $db | query db "
-            SELECT m.color, ma.hurt_player, COUNT(*) as cnt
-            FROM move_anomalies ma
-            JOIN moves m ON ma.game_id = m.game_id AND ma.ply = m.ply
-            WHERE ma.username = ? AND ma.consumed = 0
-            GROUP BY m.color, ma.hurt_player
-        " --params [$username])
-    } else { [] }
+    let anomaly_split_by_color = (open $db | query db "
+        SELECT m.color, ma.hurt_player, COUNT(*) as cnt
+        FROM move_anomalies ma
+        JOIN moves m ON ma.game_id = m.game_id AND ma.ply = m.ply
+        WHERE ma.username = ? AND ma.consumed = 0
+        GROUP BY m.color, ma.hurt_player
+    " --params [$username])
 
-    let king_blunder_count = if ($anomaly_count | into int) == 0 {
-        (open $db | query db "
-            SELECT COUNT(*) as cnt
-            FROM move_anomalies ma
-            JOIN move_states ms ON ma.game_id = ms.game_id AND ma.ply = ms.ply
-            WHERE ma.username = ? AND ma.consumed = 0 AND ma.hurt_player = 1 AND ms.king_exposed = 1
-        " --params [$username] | first | get cnt)
-    } else { 0 }
+    let king_blunder_count = (open $db | query db "
+        SELECT COUNT(*) as cnt
+        FROM move_anomalies ma
+        JOIN move_states ms ON ma.game_id = ms.game_id AND ma.ply = ms.ply
+        WHERE ma.username = ? AND ma.consumed = 0 AND ma.hurt_player = 1 AND ms.king_exposed = 1
+    " --params [$username] | default [{cnt: 0}] | first | get cnt)
 
     # Opponent blunders in this player's games (opportunities to capitalize)
     let opponent_blunder_count = (open $db | query db "
@@ -169,6 +159,28 @@ def main [username: string, --db: string, --examples: int = 3] {
     } else { 0 }
 
     # ── Concept examples ──
+    # ── Mate analysis ──
+    let mate_analysis = (open $db | query db "
+        WITH mate_positions AS (
+            SELECT m.game_id, m.ply, m.color,
+                   CASE WHEN m.color='white' THEN g.white ELSE g.black END as player,
+                   p.mate_in_1,
+                   n.is_checkmate as next_is_checkmate
+            FROM moves m
+            JOIN positions p ON m.next_position_id = p.zobrist
+            LEFT JOIN moves m2 ON m.game_id=m2.game_id AND m.ply+1=m2.ply
+            LEFT JOIN positions n ON m2.next_position_id = n.zobrist
+            JOIN games g ON m.game_id=g.game_id
+            WHERE p.mate_in_1 > 0 AND (g.white = ? OR g.black = ?)
+        )
+        SELECT CASE WHEN player = ? THEN 'player' ELSE 'opponent' END as who,
+               COUNT(*) as opportunities,
+               SUM(CASE WHEN next_is_checkmate=1 THEN 1 ELSE 0 END) as found,
+               COUNT(*) - SUM(CASE WHEN next_is_checkmate=1 THEN 1 ELSE 0 END) as missed
+        FROM mate_positions
+        GROUP BY CASE WHEN player = ? THEN 'player' ELSE 'opponent' END
+    " --params [$username, $username, $username, $username])
+
     let concept_examples = if ($examples > 0) and ($concepts | length) > 0 {
         let top_names = ($concepts | first 3 | get concept)
         $top_names | reduce -f {} {|cname, acc|
