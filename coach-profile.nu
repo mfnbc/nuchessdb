@@ -46,11 +46,15 @@ def main [username: string, --db: string, --examples: int = 3] {
     " --params [$username] | first | get cnt)
 
     let positional_raw = (open $db | query db "
-        SELECT m.color, ms.phase_bucket, p.hugm_eval_arr
+        SELECT m.color,
+               CASE WHEN m.ply <= 12 THEN 'opening'
+                    WHEN m.ply <= 30 THEN 'midgame'
+                    WHEN m.ply <= 50 THEN 'late_mid'
+                    ELSE 'endgame' END as phase,
+               p.hugm_eval_arr
         FROM moves m
         JOIN positions p ON m.next_position_id = p.zobrist
         JOIN games g ON m.game_id = g.game_id
-        JOIN move_states ms ON m.game_id = ms.game_id AND m.ply = ms.ply
         WHERE g.white = ? OR g.black = ?
     " --params [$username, $username])
 
@@ -91,7 +95,7 @@ def main [username: string, --db: string, --examples: int = 3] {
     let positional = if ($positional_raw | length) > 100 {
         $positional_raw | each {|r|
             let arr = try { $r.hugm_eval_arr | from json } catch { [] }
-            { color: $r.color, phase: ($r.phase_bucket | into int),
+            { color: $r.color, phase: $r.phase,
               pawns: (if ($arr | length) > 1 { $arr | get 1 | into int } else { 0 }),
               activity: (if ($arr | length) > 2 { $arr | get 2 | into int } else { 0 }),
               king: (if ($arr | length) > 3 { $arr | get 3 | into int } else { 0 }) }
@@ -100,7 +104,7 @@ def main [username: string, --db: string, --examples: int = 3] {
         | items {|key, group|
             let n = ($group | length)
             let parts = ($key | split row ":")
-            { color: $parts.0, phase: (match ($parts.1 | into int) { 0 => "endgame", 1 => "late_mid", 2 => "midgame", _ => "opening" }),
+            { color: $parts.0, phase: $parts.1,
               n: $n,
               pawns: (($group | get pawns | math sum) / ($n | into float) | math round --precision 1),
               activity: (($group | get activity | math sum) / ($n | into float) | math round --precision 1),
@@ -122,17 +126,18 @@ def main [username: string, --db: string, --examples: int = 3] {
         let top_names = ($concepts | first 3 | get concept)
         $top_names | reduce -f {} {|cname, acc|
             let positions = (open $db | query db "
-                SELECT ma.game_id, ma.ply, ma.z_score, ma.severity, p.fen, p.hugm_score
+                SELECT ma.game_id, ma.ply, MAX(ma.z_score) as z, MAX(ma.severity) as sev, p.fen, p.hugm_score
                 FROM move_anomalies ma
                 JOIN moves m ON ma.game_id = m.game_id AND ma.ply = m.ply
                 JOIN positions p ON m.next_position_id = p.zobrist
-                WHERE ma.username = ? AND ma.consumed = 0
-                ORDER BY ABS(ma.severity) DESC LIMIT ?
-            " --params [$username, $examples])
+                WHERE ma.username = ? AND ma.consumed = 0 AND ma.concept_name = ?
+                GROUP BY ma.game_id, ma.ply
+                ORDER BY sev DESC LIMIT ?
+            " --params [$username, $cname, $examples])
             $acc | insert $cname ($positions | each {|p| {
                 game_id: ($p.game_id | into string), ply: $p.ply,
-                z_score: ($p.z_score | math round --precision 2),
-                severity_cp: $p.severity, fen: $p.fen, hugm_score: $p.hugm_score
+                z_score: ($p.z | math round --precision 2),
+                severity_cp: $p.sev, fen: $p.fen, hugm_score: $p.hugm_score
             }})
         }
     } else { {} }
@@ -142,6 +147,7 @@ def main [username: string, --db: string, --examples: int = 3] {
         player: $username,
         games: $game_count,
         unreviewed_anomalies: $anomaly_count,
+        sign_convention: "avg_score_cp always from player's perspective: positive=good for player (e.g. +200cp means player is up 2 pawns). King safety in positional_components: positive=White's king is safe (negative=Black's king is safe).",
         phase_profile: $phase_profile,
         positional_components: $positional,
         concepts: $concepts,
