@@ -115,9 +115,18 @@ def main [username: string, --db: string, --examples: int = 3] {
     # ── Anomalies ──
     let anomalies = if $anomaly_count > 0 {
         (open $db | query db "
-            SELECT game_id, ply, ROUND(MAX(z_score),2) as z, ROUND(MAX(severity),0) as sev
+            SELECT game_id, ply, ROUND(MAX(z_score),2) as z, ROUND(MAX(severity),0) as sev,
+                   MAX(signed_delta) as sd, MAX(hurt_player) as hp
             FROM move_anomalies WHERE username = ? AND consumed = 0
             GROUP BY game_id, ply ORDER BY sev DESC LIMIT 5
+        " --params [$username])
+    } else { [] }
+
+    let anomaly_split = if $anomaly_count > 0 {
+        (open $db | query db "
+            SELECT hurt_player, COUNT(*) as cnt
+            FROM move_anomalies WHERE username = ? AND consumed = 0
+            GROUP BY hurt_player
         " --params [$username])
     } else { [] }
 
@@ -153,7 +162,13 @@ def main [username: string, --db: string, --examples: int = 3] {
         concepts: $concepts,
         anomalies: ($anomalies | each {|a| {
             game_id: ($a.game_id | into string), ply: $a.ply,
-            z_score: $a.z, severity_cp: $a.sev
+            z_score: $a.z, severity_cp: $a.sev,
+            signed_delta: ($a.sd | default 0 | into int),
+            hurt_player: ($a.hp | default 0 | into bool)
+        }}),
+        anomaly_split: ($anomaly_split | each {|r| {
+            hurt_player: ($r.hurt_player | into bool),
+            count: ($r.cnt | into int)
         }}),
         concept_examples: $concept_examples,
     }
