@@ -128,9 +128,20 @@ def main [username: string, --db: string, --examples: int = 3] {
     "
     let anomaly_split = (open $db | query db $anomaly_split_q --params [$username])
 
-    let anomaly_split_by_color = (open $db | query db $"SELECT m.color, ma.hurt_player, COUNT(1) as cnt FROM move_anomalies ma JOIN moves m ON ma.game_id = m.game_id AND ma.ply = m.ply WHERE ma.username = '($username)' AND ma.consumed = 0 GROUP BY m.color, ma.hurt_player")
+    let anomaly_split_by_color_q = "
+        SELECT m.color, ma.hurt_player, COUNT(*) as cnt
+        FROM move_anomalies ma JOIN moves m ON ma.game_id = m.game_id AND ma.ply = m.ply
+        WHERE ma.username = ? AND ma.consumed = 0
+        GROUP BY m.color, ma.hurt_player
+    "
+    let anomaly_split_by_color = (open $db | query db $anomaly_split_by_color_q --params [$username])
 
-    let king_blunder_count = ((open $db | query db $"SELECT COUNT(1) as cnt FROM move_anomalies ma JOIN move_states ms ON ma.game_id = ms.game_id AND ma.ply = ms.ply WHERE ma.username = '($username)' AND ma.consumed = 0 AND ma.hurt_player = 1 AND ms.king_exposed = 1") | get cnt | first | default 0 | into int)
+    let king_blunder_count_q = "
+        SELECT COUNT(*) as cnt
+        FROM move_anomalies ma JOIN move_states ms ON ma.game_id = ms.game_id AND ma.ply = ms.ply
+        WHERE ma.username = ? AND ma.consumed = 0 AND ma.hurt_player = 1 AND ms.king_exposed = 1
+    "
+    let king_blunder_count = ((open $db | query db $king_blunder_count_q --params [$username]) | get cnt | first | default 0 | into int)
 
     # Opponent blunders in this player's games (opportunities to capitalize)
     let opponent_blunder_count = (open $db | query db "
