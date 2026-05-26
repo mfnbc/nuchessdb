@@ -25,6 +25,7 @@ def main [username: string, --db: string, --examples: int = 3] {
                     ELSE 'endgame' END as phase,
                COUNT(*) as n,
                AVG(CASE WHEN m.color='white' THEN p.hugm_score ELSE -p.hugm_score END) as score_from_player,
+               json_group_array(CASE WHEN m.color='white' THEN p.hugm_score ELSE -p.hugm_score END) as scores_json,
                AVG(ABS(p.hugm_score)) as abs_material
         FROM moves m
         JOIN positions p ON m.next_position_id = p.zobrist
@@ -69,10 +70,28 @@ def main [username: string, --db: string, --examples: int = 3] {
         $phase_baselines | reduce -f {} {|row, acc|
             let name = $row.phase
             let color_key = $"as_($row.color)"
+            let scores = try { $row.scores_json | from json | sort } catch { [] }
+            let n = ($row.n | into int)
+            let median = if ($scores | length) > 0 {
+                let mid = ($scores | length) // 2
+                if ($scores | length) mod 2 == 0 {
+                    (($scores | get $mid | into float) + ($scores | get ($mid - 1) | into float)) / 2.0 | math round --precision 0
+                } else {
+                    $scores | get $mid | into float | math round --precision 0
+                }
+            } else { 0.0 }
+            let avg = ($row.score_from_player | into float)
+            let std_dev = if ($scores | length) > 1 {
+                let cnt = ($scores | length) - 1
+                let variance = ($scores | each {|s| let v = ($s | into float) - $avg; $v * $v } | math sum) / ($cnt | into float)
+                $variance | math sqrt | math round --precision 0
+            } else { 0.0 }
             let entry = if ($acc | get -o $name) == null { {} } else { $acc | get $name }
             let new_entry = ($entry | upsert $color_key {
                 n: $row.n,
-                avg_score_cp: ($row.score_from_player | math round --precision 0),
+                avg_score_cp: ($avg | math round --precision 0),
+                median_score_cp: $median,
+                score_std_dev: $std_dev,
                 avg_abs_material_cp: ($row.abs_material | math round --precision 0)
             })
             $acc | upsert $name $new_entry
@@ -122,11 +141,8 @@ def main [username: string, --db: string, --examples: int = 3] {
         GROUP BY ma.game_id, ma.ply ORDER BY sev DESC LIMIT 5
     " --params [$username])
 
-    let anomaly_split = (open $db | query db "
-        SELECT hurt_player, COUNT(*) as cnt
-        FROM move_anomalies WHERE username = ? AND consumed = 0
-        GROUP BY hurt_player
-    " --params [$username] | default [])
+    let as_sql = "SELECT hurt_player, COUNT(*) as cnt FROM move_anomalies WHERE username = ? AND consumed = 0 GROUP BY hurt_player"
+    let anomaly_split = try { (open $db | query db $as_sql --params [$username]) } catch { [] }
 
     let anomaly_split_by_color = (open $db | query db "
         SELECT m.color, ma.hurt_player, COUNT(*) as cnt
@@ -206,6 +222,7 @@ def main [username: string, --db: string, --examples: int = 3] {
         player: $username,
         games: $game_count,
         unreviewed_anomalies: $anomaly_count,
+        blunders_per_game: ((($anomaly_split | where {|r| $r.hurt_player } | default [{count: 0}] | first | get count) | into float) / (($game_count | into int | default 1) | into float) | math round --precision 2),
         sign_convention: "avg_score_cp always from player's perspective: positive=good for player (e.g. +200cp means player is up 2 pawns). King safety in positional_components: positive=White's king is safe (negative=Black's king is safe).",
         phase_profile: $phase_profile,
         positional_components: $positional,
