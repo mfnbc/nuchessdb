@@ -52,6 +52,8 @@ def init-schema [] {
     " | ignore
     # Add state_id column if table already exists without it (migration)
     try { open $db | query db "ALTER TABLE positions ADD COLUMN state_id INTEGER" } catch { }
+    try { open $db | query db "ALTER TABLE positions ADD COLUMN mate_in_1 INTEGER DEFAULT 0" } catch { }
+    try { open $db | query db "ALTER TABLE positions ADD COLUMN is_checkmate INTEGER DEFAULT 0" } catch { }
 
     open $db | query db "
         CREATE TABLE IF NOT EXISTS moves (
