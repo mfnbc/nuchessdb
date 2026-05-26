@@ -110,27 +110,7 @@ def main [username: string, --db: string, --examples: int = 3] {
         | sort-by occurrences --reverse
     } else { [] }
 
-    # ── Positional components ──
-    let positional = $positional_raw | each {|r|
-            let arr = try { $r.hugm_eval_arr | from json } catch { [] }
-            let raw_king = (if ($arr | length) > 3 { $arr | get 3 | into int } else { 0 })
-            { color: $r.color, phase: $r.phase,
-              pawns: (if ($arr | length) > 1 { $arr | get 1 | into int } else { 0 }),
-              activity: (if ($arr | length) > 2 { $arr | get 2 | into int } else { 0 }),
-              own_king_safety_cp: (if $r.color == "black" { -1 * $raw_king } else { $raw_king }) }
-        }
-        | group-by {|r| $"($r.color):($r.phase)"}
-        | items {|key, group|
-            let n = ($group | length)
-            let parts = ($key | split row ":")
-            { color: $parts.0, phase: $parts.1,
-              n: $n,
-              pawns: (($group | get pawns | math sum) / ($n | into float) | math round --precision 1),
-              activity: (($group | get activity | math sum) / ($n | into float) | math round --precision 1),
-              own_king_safety_cp: (($group | get own_king_safety_cp | math sum) / ($n | into float) | math round --precision 1) }
-        }
-
-    # ── Anomalies ──
+    # ── Anomalies (simple queries first, avoids Nu 0.111 parse ordering issues) ──
     let anomalies = (open $db | query db "
         SELECT ma.game_id, ma.ply, ROUND(MAX(ma.z_score),2) as z, ROUND(MAX(ma.severity),0) as sev,
                MAX(ma.signed_delta) as sd, MAX(ma.hurt_player) as hp,
@@ -145,7 +125,7 @@ def main [username: string, --db: string, --examples: int = 3] {
         SELECT hurt_player, COUNT(*) as cnt
         FROM move_anomalies WHERE username = ? AND consumed = 0
         GROUP BY hurt_player
-    " --params [$username] | default [])
+    " --params [$username])
 
     let anomaly_split_by_color = (open $db | query db "
         SELECT m.color, ma.hurt_player, COUNT(*) as cnt
@@ -178,6 +158,26 @@ def main [username: string, --db: string, --examples: int = 3] {
     } else { 0 }
 
     # ── Concept examples ──
+    # ── Positional components ──
+    let positional = $positional_raw | each {|r|
+            let arr = try { $r.hugm_eval_arr | from json } catch { [] }
+            let raw_king = (if ($arr | length) > 3 { $arr | get 3 | into int } else { 0 })
+            { color: $r.color, phase: $r.phase,
+              pawns: (if ($arr | length) > 1 { $arr | get 1 | into int } else { 0 }),
+              activity: (if ($arr | length) > 2 { $arr | get 2 | into int } else { 0 }),
+              own_king_safety_cp: (if $r.color == "black" { -1 * $raw_king } else { $raw_king }) }
+        }
+        | group-by {|r| $"($r.color):($r.phase)"}
+        | items {|key, group|
+            let n = ($group | length)
+            let parts = ($key | split row ":")
+            { color: $parts.0, phase: $parts.1,
+              n: $n,
+              pawns: (($group | get pawns | math sum) / ($n | into float) | math round --precision 1),
+              activity: (($group | get activity | math sum) / ($n | into float) | math round --precision 1),
+              own_king_safety_cp: (($group | get own_king_safety_cp | math sum) / ($n | into float) | math round --precision 1) }
+        }
+
     # ── Mate analysis ──
     let mate_analysis = (open $db | query db "
         WITH mate_positions AS (
