@@ -141,8 +141,11 @@ def main [username: string, --db: string, --examples: int = 3] {
         GROUP BY ma.game_id, ma.ply ORDER BY sev DESC LIMIT 5
     " --params [$username])
 
-    let as_sql = "SELECT hurt_player, COUNT(*) as cnt FROM move_anomalies WHERE username = ? AND consumed = 0 GROUP BY hurt_player"
-    let anomaly_split = try { (open $db | query db $as_sql --params [$username]) } catch { [] }
+    let anomaly_split = (open $db | query db "
+        SELECT hurt_player, COUNT(*) as cnt
+        FROM move_anomalies WHERE username = ? AND consumed = 0
+        GROUP BY hurt_player
+    " --params [$username] | default [])
 
     let anomaly_split_by_color = (open $db | query db "
         SELECT m.color, ma.hurt_player, COUNT(*) as cnt
