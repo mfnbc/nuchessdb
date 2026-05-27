@@ -423,6 +423,26 @@ def "main coach-profile" [
         WHERE g.white = ? OR g.black = ?
     " --params [$username, $username] | first | get cnt | into int)
 
+    let wl_by_color = (open $db | query db "
+        SELECT color, COUNT(*) as games,
+               SUM(is_win) as wins, SUM(is_draw) as draws, SUM(is_loss) as losses,
+               ROUND(100.0 * SUM(is_win) / COUNT(*), 1) as win_pct,
+               ROUND(100.0 * SUM(is_draw) / COUNT(*), 1) as draw_pct
+        FROM (
+            SELECT 'white' as color,
+                   CASE WHEN result = '1-0'     THEN 1 ELSE 0 END as is_win,
+                   CASE WHEN result = '1/2-1/2' THEN 1 ELSE 0 END as is_draw,
+                   CASE WHEN result = '0-1'     THEN 1 ELSE 0 END as is_loss
+            FROM games WHERE white = ?
+            UNION ALL
+            SELECT 'black' as color,
+                   CASE WHEN result = '0-1'     THEN 1 ELSE 0 END,
+                   CASE WHEN result = '1/2-1/2' THEN 1 ELSE 0 END,
+                   CASE WHEN result = '1-0'     THEN 1 ELSE 0 END
+            FROM games WHERE black = ?
+        ) GROUP BY color
+    " --params [$username, $username])
+
     let phase_baselines = (open $db | query db "
         SELECT m.color,
             CASE WHEN m.ply <= 12 THEN 'opening'
@@ -581,10 +601,8 @@ def "main coach-profile" [
         $concepts | first 3 | get concept | reduce -f {} { |cname, acc|
             let ex = (open $db | query db "
                 SELECT ma.game_id, ma.ply, MAX(ma.z_score) as z_score,
-                       MAX(ma.severity) as severity_cp, p.fen, p.hugm_score
+                       MAX(ma.severity) as severity_cp
                 FROM move_anomalies ma
-                JOIN moves m ON ma.game_id = m.game_id AND ma.ply = m.ply
-                JOIN positions p ON m.next_position_id = p.zobrist
                 WHERE ma.username = ? AND ma.consumed = 0 AND ma.concept_name = ?
                 GROUP BY ma.game_id, ma.ply ORDER BY severity_cp DESC LIMIT ?
             " --params [$username, $cname, $examples])
@@ -593,8 +611,6 @@ def "main coach-profile" [
                 ply:         $p.ply
                 z_score:     ($p.z_score | math round --precision 2)
                 severity_cp: $p.severity_cp
-                fen:         $p.fen
-                hugm_score:  $p.hugm_score
             }})
         }
     } else { {} }
@@ -602,6 +618,7 @@ def "main coach-profile" [
     let profile = {
         player:               $username
         games:                $game_count
+        results_by_color:     $wl_by_color
         unreviewed_anomalies: $anomaly_count
         blunders_per_game:    $blunders_per_game
         sign_convention:      "avg_score_cp is from the player's perspective: positive = player is ahead."
@@ -625,6 +642,10 @@ def "main coach-profile" [
         print ($profile | to json -r)
     } else {
         print $"── ($username)  |  games: ($game_count)  |  anomalies: ($anomaly_count)  |  blunders/game: ($blunders_per_game) ──"
+        if ($wl_by_color | is-not-empty) {
+            print "\nResults by color:"
+            print ($wl_by_color | table)
+        }
         if ($concepts | is-not-empty) {
             print "\nTop concepts:"
             print ($concepts | first 5 | table)
