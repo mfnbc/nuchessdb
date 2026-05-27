@@ -621,7 +621,6 @@ def "main coach-profile" [
         results_by_color:     $wl_by_color
         unreviewed_anomalies: $anomaly_count
         blunders_per_game:    $blunders_per_game
-        sign_convention:      "avg_score_cp is from the player's perspective: positive = player is ahead."
         phase_profile:        $phase_profile
         positional_components: $positional
         concepts:             $concepts
