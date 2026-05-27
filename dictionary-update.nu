@@ -1,70 +1,75 @@
 #!/usr/bin/env nu
-# dictionary-update.nu — collapse detection and chain accuracy tracking
+# dictionary-update.nu — incremental Tier-1000 concept tracking
 #
-# For each position, runs HUGM evaluation, extracts tactical concepts,
-# and tracks collapse accuracy: did you see the exchange, maximize it,
-# or correctly avoid a losing exchange?
+# Runs HUGM evaluation on positions not yet processed for a player, extracts
+# tactical concepts (forks, pins, hanging pieces, etc.) and updates the
+# per-player Welford baselines in player_baselines using a parallel merge.
 #
-# Tracks: collapse, collapse_accuracy (chain step match %),
-# collapse_miss_cp (centipawns left on table)
+# This complements derive-coach (which does a full batch recompute) by
+# handling incremental updates from new positions without re-scanning everything.
 #
-# Usage: nu dictionary-update.nu <username> [--db <path>] [--limit <int>]
+# Usage: nu dictionary-update.nu <username> [--db <path>] [--limit <n>]
+
+const TIER_1000_CONCEPTS = [
+    "collapse" "collapse_accuracy" "collapse_miss_cp"
+    "pin" "skewer" "discovered_attack" "hanging_piece"
+    "material_imbalance" "king_in_check"
+]
 
 def _db_path [] { "./chess.db" }
 
-# Tier 1000 blunder sensor concept names (Survival + Threat tiers)
-# "collapse" = any tactical exchange or simplification chain (detected via forks)
-const TIER_1000_CONCEPTS = ["collapse", "collapse_accuracy", "collapse_miss_cp", "pin", "skewer", "discovered_attack", "hanging_piece", "material_imbalance", "king_in_check"]
-
-def main [username: string, --db: string, --limit: int = 100] {
-    let db = if ($db != null) { $db } else { (_db_path) }
+def main [
+    username: string
+    --db: string
+    --limit: int = 100
+] {
+    let db = if ($db | is-empty) { (_db_path) } else { $db }
 
     if not ($db | path exists) {
-        print "Database not found."
-        return
+        error make {msg: $"Database not found: ($db)"}
     }
 
-    # 1. Load existing Welford states for this player (Tier 1000 concepts only)
-    let existing = (open $db | query db "
-        SELECT concept_name, phase_bucket, mean, m2, count
+    # Load existing Welford state for this player's Tier-1000 concepts.
+    # We store (mean, std, count) and reconstruct M2 = std^2 * (count - 1) for merging.
+    let concept_in_clause = ($TIER_1000_CONCEPTS | each { |c| $"'($c)'" } | str join ", ")
+    let existing = (open $db | query db $"
+        SELECT concept_name, phase_bucket, mean, std, count
         FROM player_baselines
-        WHERE username = ? AND concept_name IN ('collapse','collapse_accuracy','collapse_miss_cp','pin','skewer','discovered_attack','hanging_piece','material_imbalance','king_in_check')
+        WHERE username = ? AND concept_name IN \(($concept_in_clause)\)
     " --params [$username])
 
-    let existing_map = if ($existing | is-empty) {
-        {}
-    } else {
-        $existing | reduce -f {} {|row, acc|
+    let existing_map = if ($existing | is-empty) { {} } else {
+        $existing | reduce -f {} { |row, acc|
             let key = $"($row.concept_name):($row.phase_bucket)"
-            $acc | insert $key { mean: ($row.mean | into float), m2: ($row.m2 | into float), count: ($row.count | into int) }
+            let n   = ($row.count | into float)
+            # Reconstruct M2 from stored std: M2 = variance * (n-1) = std^2 * (n-1)
+            let m2  = if $n > 1 { ($row.std | into float) * ($row.std | into float) * ($n - 1) } else { 0.0 }
+            $acc | insert $key { mean: ($row.mean | into float), m2: $m2, count: $n }
         }
     }
 
-    print $"Loaded ($existing | length) existing Welford baselines for ($username)"
+    print $"Loaded ($existing | length) existing baselines for ($username)."
 
-    # 2. Find new positions not yet evaluated for this player
-    #    We track which positions have been processed via a simple marker table
+    # Track which positions have already been processed to avoid double-counting.
     open $db | query db "
         CREATE TABLE IF NOT EXISTS dict_update_marker (
-            username TEXT NOT NULL,
-            game_id INTEGER NOT NULL,
-            ply INTEGER NOT NULL,
+            username TEXT    NOT NULL,
+            game_id  INTEGER NOT NULL,
+            ply      INTEGER NOT NULL,
             PRIMARY KEY (username, game_id, ply)
-        );
+        )
     " | ignore
 
     let new_moves = (open $db | query db "
-        SELECT m.game_id, m.ply, p.fen,
-               CASE WHEN m.color = 'white' THEN g.white ELSE g.black END as player,
-               m.color as player_color,
-               n.uci as next_uci, n.san as next_san, n.color as next_color,
-               nn.uci as next2_uci, nn.san as next2_san, nn.color as next2_color,
-               nnn.uci as next3_uci, nnn.san as next3_san
+        SELECT m.game_id, m.ply, p.fen, m.color,
+               n.uci   as next_uci,
+               nn.uci  as next2_uci,
+               nnn.uci as next3_uci
         FROM moves m
         JOIN positions p ON m.next_position_id = p.zobrist
         JOIN games g ON m.game_id = g.game_id
-        LEFT JOIN moves n ON m.game_id = n.game_id AND m.ply + 1 = n.ply
-        LEFT JOIN moves nn ON m.game_id = nn.game_id AND m.ply + 2 = nn.ply
+        LEFT JOIN moves n   ON m.game_id = n.game_id   AND m.ply + 1 = n.ply
+        LEFT JOIN moves nn  ON m.game_id = nn.game_id  AND m.ply + 2 = nn.ply
         LEFT JOIN moves nnn ON m.game_id = nnn.game_id AND m.ply + 3 = nnn.ply
         WHERE (g.white = ? OR g.black = ?)
           AND NOT EXISTS (
@@ -82,179 +87,140 @@ def main [username: string, --db: string, --limit: int = 100] {
 
     print $"Processing ($new_moves | length) new positions..."
 
-    # 3. For each position, run HUGM and extract Tier 1000 concept deltas
+    # Extract Tier-1000 concept observations from each position.
     let deltas = (
-        $new_moves
-        | each {|row|
-            let eval = try {
-                $row.fen | chessdb hugm-eval
-            } catch { null }
-            if ($eval == null) { return [] }
+        $new_moves | each { |row|
+            let eval = try { $row.fen | chessdb hugm-eval } catch { null }
+            if $eval == null { return [] }
 
-            let report = $eval.sensor_report
-            let phase = if ($eval.phase != null) { $eval.phase } else { 20 }
-            let phase_bucket = (
-                if $phase <= 8 { 0 }
-                else if $phase <= 16 { 1 }
-                else if $phase <= 24 { 2 }
-                else { 3 }
-            )
+            let report      = $eval.sensor_report
+            let phase       = ($eval.phase? | default 20)
+            let phase_bucket = if $phase <= 8 { 0 } else if $phase <= 16 { 1 } else if $phase <= 24 { 2 } else { 3 }
 
-            # Extract next-move destinations
-            let next_dest = if ($row.next_uci | is-not-empty) {
-                ($row.next_uci | str substring 2..4)
-            } else { "" }
-            let next2_dest = if ($row.next2_uci | is-not-empty) {
-                ($row.next2_uci | str substring 2..4)
-            } else { "" }
-            let next3_dest = if ($row.next3_uci | is-not-empty) {
-                ($row.next3_uci | str substring 2..4)
-            } else { "" }
+            let dest  = { |uci| if ($uci | is-empty) { "" } else { $uci | str substring 2..4 } }
+            let next  = (do $dest $row.next_uci)
+            let next2 = (do $dest $row.next2_uci)
+            let next3 = (do $dest $row.next3_uci)
 
-            mut concepts = []
+            mut observations = []
 
-            # Forks — accuracy vs SEE optimal collapse
+            # Forks: track whether the player initiated and completed the exchange chain
             for f in ($report.evaluated_forks | default []) {
-                $concepts = ($concepts | append { name: "fork", severity: 240 })
+                $observations = ($observations | append {name: "fork", severity: 240})
 
                 if ($f.hangs | is-not-empty) and ($f.chain | length) > 0 {
-                    let see_cp = ($f.see_cp | into float)
-                    let chain = $f.chain
-                    let init_dest = ($chain | first).square
-                    let initiated = ($next_dest | is-not-empty) and $next_dest == $init_dest
-                    let total_steps = ($chain | length) - 1  # steps after victim identification
+                    let see_cp     = ($f.see_cp | into float)
+                    let chain      = $f.chain
+                    let init_sq    = ($chain | first).square
+                    let initiated  = ($next | is-not-empty) and $next == $init_sq
+                    let step_count = ($chain | length) - 1
+                    let actual     = [$next, $next2, $next3]
 
-                    # Count how many chain steps the player matched
-                    let actual_dests = [$next_dest, $next2_dest, $next3_dest]
                     mut steps_done = 0
                     for i in 1..($chain | length) {
-                        let step = ($chain | get $i)
-                        let step_sq = ($step | get square)
-                        let d = ($actual_dests | get ($i - 1))
-                        let match = if ($d | is-not-empty) and ($d == $step_sq) { true } else { false }
-                        if $match { $steps_done = $steps_done + 1 } else { break }
+                        let sq = (($chain | get $i) | get square)
+                        if ($actual | get ($i - 1) | is-not-empty) and ($actual | get ($i - 1)) == $sq {
+                            $steps_done += 1
+                        } else { break }
                     }
 
                     if $see_cp > 0.0 {
-                        # Winning exchange — optimal is to enter and follow through
+                        # Winning exchange: optimal is to enter and complete it
                         if $initiated {
-                            let acc = (($steps_done | into float) / ($total_steps | into float) * 100.0 | math round --precision 0)
-                            $concepts = ($concepts | append { name: "collapse_accuracy", severity: ($acc | into int) })
-                            if $steps_done < $total_steps {
-                                $concepts = ($concepts | append { name: "collapse_miss_cp", severity: ($see_cp | math round --precision 0 | into int) })
+                            let acc = (($steps_done | into float) / ($step_count | into float) * 100.0 | math round --precision 0 | into int)
+                            $observations = ($observations | append {name: "collapse_accuracy",  severity: $acc})
+                            if $steps_done < $step_count {
+                                $observations = ($observations | append {name: "collapse_miss_cp", severity: ($see_cp | math round --precision 0 | into int)})
                             }
                         } else {
-                            $concepts = ($concepts | append { name: "collapse_miss_cp", severity: ($see_cp | math round --precision 0 | into int) })
+                            $observations = ($observations | append {name: "collapse_miss_cp", severity: ($see_cp | math round --precision 0 | into int)})
                         }
                     } else if $see_cp < 0.0 {
-                        # Losing exchange — optimal is to AVOID
+                        # Losing exchange: optimal is to avoid it
                         if $initiated {
-                            let loss = ($see_cp | math abs | math round --precision 0 | into int)
-                            $concepts = ($concepts | append { name: "collapse_accuracy", severity: 0 })
-                            $concepts = ($concepts | append { name: "collapse_miss_cp", severity: $loss })
+                            $observations = ($observations | append {name: "collapse_accuracy",  severity: 0})
+                            $observations = ($observations | append {name: "collapse_miss_cp",   severity: ($see_cp | math abs | math round --precision 0 | into int)})
                         } else {
-                            $concepts = ($concepts | append { name: "collapse_accuracy", severity: 100 })
+                            $observations = ($observations | append {name: "collapse_accuracy", severity: 100})
                         }
                     }
                 }
             }
 
-            for p in $report.tactical.pins {
-                $concepts = ($concepts | append { name: "pin", severity: 160 })
-            }
-            for s in $report.tactical.skewers {
-                $concepts = ($concepts | append { name: "skewer", severity: 150 })
-            }
-            for d in $report.tactical.discovered {
-                $concepts = ($concepts | append { name: "discovered_attack", severity: 180 })
-            }
-            for h in $report.tactical.hanging {
-                $concepts = ($concepts | append { name: "hanging_piece", severity: 200 })
-            }
+            $observations = ($observations | append ($report.tactical.pins       | each { {name: "pin",               severity: 160} }))
+            $observations = ($observations | append ($report.tactical.skewers    | each { {name: "skewer",            severity: 150} }))
+            $observations = ($observations | append ($report.tactical.discovered | each { {name: "discovered_attack", severity: 180} }))
+            $observations = ($observations | append ($report.tactical.hanging    | each { {name: "hanging_piece",     severity: 200} }))
 
-            $concepts | each {|c| {
-                concept_name: $c.name,
-                phase_bucket: $phase_bucket,
-                severity: $c.severity,
-                game_id: $row.game_id,
-                ply: $row.ply,
+            $observations | each { |c| {
+                concept_name: $c.name
+                phase_bucket: $phase_bucket
+                severity:     $c.severity
+                game_id:      $row.game_id
+                ply:          $row.ply
             }}
-        }
-        | flatten
+        } | flatten
     )
 
+    # Mark positions as processed regardless of whether we found any concepts
+    let markers = ($new_moves | each { |m| {username: $username, game_id: $m.game_id, ply: $m.ply} })
+    if ($markers | is-not-empty) {
+        $markers | into sqlite $db -t dict_update_marker | ignore
+    }
+
     if ($deltas | is-empty) {
-        print "No Tier 1000 concepts detected in new positions."
-        # Still mark positions as processed
-        mark-processed $db $username $new_moves
+        print "No Tier-1000 concepts detected in new positions."
         return
     }
 
-    # 4. Aggregate deltas per concept per phase_bucket
-    let aggregates = (
+    # Aggregate new observations per (concept, phase_bucket)
+    let new_stats = (
         $deltas
-        | group-by {|d| $"($d.concept_name):($d.phase_bucket)"}
-        | items {|key, group|
-            let values = ($group | get severity)
-            let n = ($values | length)
-            let sum = ($values | math sum)
-            let mean = ($sum / ($n | into float))
-            let m2 = ($values | each {|v| ($v - $mean) * ($v - $mean)} | math sum)
-            {
-                key: $key,
-                n: $n,
-                mean: $mean,
-                m2: $m2,
-            }
+        | group-by { |d| $"($d.concept_name):($d.phase_bucket)" }
+        | items { |key, group|
+            let vals = ($group | get severity)
+            let n    = ($vals | length | into float)
+            let mean = ($vals | math avg)
+            let m2   = ($vals | each { |v| let d = ($v - $mean); $d * $d } | math sum)
+            {key: $key, n: $n, mean: $mean, m2: $m2}
         }
     )
 
-    # 5. Merge with existing Welford states
-    let merged = (
-        $aggregates | each {|agg|
-            let existing_state = ($existing_map | get -o $agg.key)
-            if ($existing_state != null) {
-                # Parallel Welford merge
-                let ca = ($existing_state.count | into float)
-                let cb = ($agg.n | into float)
-                let count = ($ca + $cb | into float)
-                let delta = ($agg.mean - $existing_state.mean)
-                let mean = ($existing_state.mean + $delta * $cb / $count)
-                let m2 = ($existing_state.m2 + $agg.m2 + $delta * $delta * $ca * $cb / $count)
-                {
-                    key: $agg.key,
-                    mean: $mean,
-                    m2: $m2,
-                    count: ($count | into int),
-                }
-            } else {
-                {
-                    key: $agg.key,
-                    mean: $agg.mean,
-                    m2: $agg.m2,
-                    count: $agg.n,
-                }
-            }
+    # Merge new stats with existing Welford state (parallel Welford merge formula)
+    let merged = ($new_stats | each { |new|
+        let old = ($existing_map | get -o $new.key)
+        if $old != null {
+            let na    = $old.count
+            let nb    = $new.n
+            let total = $na + $nb
+            let delta = $new.mean - $old.mean
+            let mean  = $old.mean + $delta * $nb / $total
+            let m2    = $old.m2 + $new.m2 + $delta * $delta * $na * $nb / $total
+            {key: $new.key, mean: $mean, m2: $m2, count: ($total | into int)}
+        } else {
+            {key: $new.key, mean: $new.mean, m2: $new.m2, count: ($new.n | into int)}
         }
-    )
+    })
 
-    # 6. Write updated Welford states back to DB
-    if ($merged | length) > 0 {
-        let now = (date now | format date "%Y-%m-%dT%H:%M:%SZ")
-        let rows = ($merged | each {|m|
+    # Write updated baselines back, converting M2 → std for storage
+    if ($merged | is-not-empty) {
+        let now  = (date now | format date "%Y-%m-%dT%H:%M:%SZ")
+        let rows = ($merged | each { |m|
             let parts = ($m.key | split row ":")
+            let n     = ($m.count | into float)
+            let std   = if $n > 1 { ($m.m2 / ($n - 1) | math sqrt) } else { 0.0 }
             {
-                username: $username,
-                concept_name: $parts.0,
-                phase_bucket: ($parts.1 | into int),
-                mean: $m.mean,
-                m2: $m.m2,
-                count: $m.count,
-                last_updated: $now,
+                username:     $username
+                concept_name: ($parts | get 0)
+                phase_bucket: ($parts | get 1 | into int)
+                mean:         $m.mean
+                std:          $std
+                count:        $m.count
+                last_updated: $now
             }
         })
 
-        # Replace existing rows by deleting and re-inserting
+        # Upsert: delete existing rows for this player+concept+phase, then re-insert
         for row in $rows {
             try {
                 open $db | query db "
@@ -263,24 +229,9 @@ def main [username: string, --db: string, --limit: int = 100] {
                 " --params [$row.username, $row.concept_name, $row.phase_bucket]
             } catch { }
         }
-
         $rows | into sqlite $db -t player_baselines | ignore
-        print $"Updated ($rows | length) Welford baselines for ($username)"
+        print $"Updated ($rows | length) baselines for ($username)."
     }
-
-    # 7. Mark positions as processed
-    mark-processed $db $username $new_moves
 
     print "Dictionary update complete."
-}
-
-def mark-processed [db: string, username: string, moves: list] {
-    let markers = ($moves | each {|m| {
-        username: $username,
-        game_id: $m.game_id,
-        ply: $m.ply,
-    }} | uniq)
-    if ($markers | length) > 0 {
-        $markers | into sqlite $db -t dict_update_marker | ignore
-    }
 }
