@@ -247,7 +247,7 @@ def "main sync" [
 ] {
     let archives = (http get $"https://api.chess.com/pub/player/($username)/games/archives").archives
     let targets  = if ($limit | is-empty) { $archives } else { $archives | last $limit }
-    print $"Fetching ($targets | length) archive(s) for ($username)..."
+    print $"Fetching ($targets | length) archives for ($username)..."
 
     let games = (
         $targets | par-each { |url|
@@ -363,9 +363,8 @@ def "main derive-coach" [
             phase_bucket: $b.phase_bucket
             mean:         $b.mean
             std:          $b.std
-            count:        0
         }})
-        db-merge $db "player_baselines" $rows ["username" "concept_name" "phase_bucket" "mean" "std" "count"]
+        db-merge $db "player_baselines" $rows ["username" "concept_name" "phase_bucket" "mean" "std"]
     }
 
     # Anomalies: INSERT OR IGNORE so previously consumed rows survive a re-derive.
@@ -592,7 +591,8 @@ def "main coach-profile" [
         }
     )
 
-    let hurt_count      = ($anomaly_split | where { |r| $r.hurt_player == 1 } | get cnt | math sum | default 0 | into int)
+    let hurt_rows  = ($anomaly_split | where { |r| $r.hurt_player == 1 })
+    let hurt_count = if ($hurt_rows | is-empty) { 0 } else { $hurt_rows | get cnt | math sum | into int }
     let blunders_per_game = if $game_count > 0 {
         ($hurt_count | into float) / ($game_count | into float) | math round --precision 2
     } else { 0.0 }
