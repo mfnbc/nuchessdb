@@ -662,6 +662,245 @@ def "main coach-profile" [
     }
 }
 
+# Focused tactical sub-profile: fork/pin/hanging anomaly breakdown, phase trends, and win-rate
+# correlation when those patterns appear on the board. Always outputs JSON.
+def "main coach-profile-tactical" [
+    username: string
+    --db: string = "./chess.db"
+] {
+    if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
+
+    let concept_summary = (open $db | query db "
+        SELECT concept_name,
+               COUNT(*) as anomalies,
+               SUM(hurt_player) as hurt_count,
+               ROUND(AVG(CAST(hurt_player AS REAL)), 3) as hurt_rate,
+               ROUND(AVG(z_score), 2) as avg_z,
+               ROUND(MAX(severity), 0) as peak_severity_cp
+        FROM move_anomalies
+        WHERE username = ? AND concept_name NOT IN ('hugm_delta')
+        GROUP BY concept_name
+        ORDER BY hurt_count DESC
+    " --params [$username])
+
+    let phase_breakdown = (open $db | query db "
+        SELECT ms.phase_bucket, ma.concept_name, COUNT(*) as cnt,
+               ROUND(AVG(CAST(ma.hurt_player AS REAL)), 3) as hurt_rate,
+               ROUND(AVG(ma.z_score), 2) as avg_z
+        FROM move_anomalies ma
+        JOIN move_states ms ON ms.game_id = ma.game_id AND ms.ply = ma.ply
+        WHERE ma.username = ? AND ma.concept_name NOT IN ('hugm_delta')
+        GROUP BY ms.phase_bucket, ma.concept_name
+        ORDER BY ms.phase_bucket, hurt_rate DESC
+    " --params [$username])
+
+    let win_rates = (open $db | query db "
+        WITH game_flags AS (
+            SELECT ms.game_id,
+                   MAX((ms.state_id >> 7) & 1) as had_fork,
+                   MAX((ms.state_id >> 8) & 1) as had_pin,
+                   MAX((ms.state_id >> 9) & 1) as had_hanging
+            FROM move_states ms GROUP BY ms.game_id
+        ),
+        player_games AS (
+            SELECT game_id, result FROM games WHERE white = ? OR black = ?
+        )
+        SELECT concept, present, COUNT(*) as games,
+               ROUND(100.0 * SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) / COUNT(*), 1) as win_pct
+        FROM (
+            SELECT 'fork' as concept, gf.had_fork as present, pg.result
+              FROM game_flags gf JOIN player_games pg ON pg.game_id = gf.game_id
+            UNION ALL
+            SELECT 'pin', gf.had_pin, pg.result
+              FROM game_flags gf JOIN player_games pg ON pg.game_id = gf.game_id
+            UNION ALL
+            SELECT 'hanging_piece', gf.had_hanging, pg.result
+              FROM game_flags gf JOIN player_games pg ON pg.game_id = gf.game_id
+        )
+        GROUP BY concept, present
+        ORDER BY concept, present
+    " --params [$username, $username])
+
+    let worst_games = (open $db | query db "
+        SELECT ma.game_id,
+               SUM(CASE WHEN ma.hurt_player = 1 THEN 1 ELSE 0 END) as hurt_moves,
+               COUNT(*) as total_anomalies,
+               ROUND(MAX(ma.z_score), 2) as peak_z,
+               ROUND(MAX(ma.severity), 0) as peak_severity_cp,
+               GROUP_CONCAT(DISTINCT ma.concept_name) as concepts
+        FROM move_anomalies ma
+        WHERE ma.username = ? AND ma.concept_name NOT IN ('hugm_delta') AND ma.consumed = 0
+        GROUP BY ma.game_id
+        HAVING hurt_moves > 0
+        ORDER BY hurt_moves DESC, peak_z DESC LIMIT 5
+    " --params [$username])
+
+    {
+        player:               $username
+        concept_summary:      $concept_summary
+        phase_breakdown:      $phase_breakdown
+        win_rate_by_flag:     $win_rates
+        worst_tactical_games: $worst_games
+        notes: "phase_bucket: 0=opening(ply≤12) 1=midgame(≤30) 2=late_mid(≤50) 3=endgame. Re-run derive-coach to populate skewer/discovered_attack."
+    } | to json
+}
+
+# Focused precision sub-profile: eval-swing baselines, blunder distribution by phase,
+# risky state transitions, and the top anomalies by z_score. Always outputs JSON.
+def "main coach-profile-precision" [
+    username: string
+    --db: string = "./chess.db"
+] {
+    if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
+
+    let swing_baselines = (open $db | query db "
+        SELECT phase_bucket, mean, std
+        FROM player_baselines
+        WHERE username = ? AND concept_name = 'hugm_delta'
+        ORDER BY phase_bucket
+    " --params [$username])
+
+    let severity_dist = (open $db | query db "
+        SELECT
+            CASE
+                WHEN z_score < 3.0 THEN 'borderline (z 2-3)'
+                WHEN z_score < 4.0 THEN 'notable (z 3-4)'
+                WHEN z_score < 5.0 THEN 'major (z 4-5)'
+                ELSE 'extreme (z 5+)'
+            END as tier,
+            COUNT(*) as cnt,
+            ROUND(AVG(CAST(hurt_player AS REAL)), 3) as hurt_rate,
+            ROUND(AVG(severity), 0) as avg_severity_cp
+        FROM move_anomalies
+        WHERE username = ? AND concept_name = 'hugm_delta'
+        GROUP BY tier
+        ORDER BY MIN(z_score)
+    " --params [$username])
+
+    let blunder_by_phase = (open $db | query db "
+        SELECT ms.phase_bucket,
+               COUNT(*) as hurt_moves,
+               COUNT(DISTINCT ma.game_id) as games_with_blunder,
+               ROUND(AVG(ma.severity), 0) as avg_severity_cp,
+               ROUND(MAX(ma.severity), 0) as max_severity_cp
+        FROM move_anomalies ma
+        JOIN move_states ms ON ms.game_id = ma.game_id AND ms.ply = ma.ply
+        WHERE ma.username = ? AND ma.hurt_player = 1 AND ma.severity > 150
+        GROUP BY ms.phase_bucket
+        ORDER BY ms.phase_bucket
+    " --params [$username])
+
+    let risky_transitions = (open $db | query db "
+        SELECT state_from, state_to, total_count, blunder_count,
+               ROUND(blunder_risk, 3) as blunder_risk
+        FROM transition_events
+        WHERE username = ? AND blunder_risk > 0.15 AND total_count >= 3
+        ORDER BY blunder_risk DESC LIMIT 5
+    " --params [$username])
+
+    let top_anomalies = (open $db | query db "
+        SELECT game_id, ply, concept_name,
+               ROUND(z_score, 2) as z_score,
+               ROUND(severity, 0) as severity_cp,
+               hurt_player
+        FROM move_anomalies
+        WHERE username = ? AND consumed = 0
+        ORDER BY z_score DESC LIMIT 10
+    " --params [$username])
+
+    {
+        player:             $username
+        swing_baselines:    $swing_baselines
+        severity_dist:      $severity_dist
+        blunder_by_phase:   $blunder_by_phase
+        risky_transitions:  $risky_transitions
+        top_anomalies:      $top_anomalies
+        notes: "phase_bucket: 0=opening 1=midgame 2=late_mid 3=endgame. swing_baselines: mean/std of |hugm_delta| per phase. risky_transitions empty until derive-coach is re-run."
+    } | to json
+}
+
+# Focused positional sub-profile: eval component trends (pawns/activity/king-safety),
+# win-rate when positional patterns are present, and positional concept anomalies.
+# Always outputs JSON.
+def "main coach-profile-position" [
+    username: string
+    --db: string = "./chess.db"
+] {
+    if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
+
+    let eval_components = (open $db | query db "
+        SELECT m.color,
+            CASE WHEN m.ply <= 12 THEN 0
+                 WHEN m.ply <= 30 THEN 1
+                 WHEN m.ply <= 50 THEN 2
+                 ELSE 3 END as phase_bucket,
+            COUNT(*) as n,
+            ROUND(AVG(CAST(json_extract(p.hugm_eval_arr, '\$[1]') AS REAL)), 1) as avg_pawns_cp,
+            ROUND(AVG(CAST(json_extract(p.hugm_eval_arr, '\$[2]') AS REAL)), 1) as avg_activity_cp,
+            ROUND(AVG(CAST(
+                CASE WHEN m.color = 'white' THEN  json_extract(p.hugm_eval_arr, '\$[3]')
+                     ELSE                        -json_extract(p.hugm_eval_arr, '\$[3]') END
+            AS REAL)), 1) as avg_king_safety_cp
+        FROM moves m
+        JOIN positions p ON m.next_position_id = p.zobrist
+        JOIN games g ON m.game_id = g.game_id
+        WHERE (m.color = 'white' AND g.white = ?) OR (m.color = 'black' AND g.black = ?)
+        GROUP BY m.color, phase_bucket
+        ORDER BY m.color, phase_bucket
+    " --params [$username, $username])
+
+    let positional_win_rates = (open $db | query db "
+        WITH game_flags AS (
+            SELECT ms.game_id,
+                   MAX((ms.state_id >> 10) & 1) as had_outpost,
+                   MAX((ms.state_id >> 11) & 1) as had_open_file,
+                   MAX((ms.state_id >> 12) & 1) as had_passed_pawn,
+                   MAX((ms.state_id >>  5) & 1) as had_king_exposed
+            FROM move_states ms GROUP BY ms.game_id
+        ),
+        player_games AS (
+            SELECT game_id, result FROM games WHERE white = ? OR black = ?
+        )
+        SELECT concept, present, COUNT(*) as games,
+               ROUND(100.0 * SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) / COUNT(*), 1) as win_pct
+        FROM (
+            SELECT 'outpost'      as concept, gf.had_outpost      as present, pg.result
+              FROM game_flags gf JOIN player_games pg ON pg.game_id = gf.game_id
+            UNION ALL
+            SELECT 'open_file',              gf.had_open_file,      pg.result
+              FROM game_flags gf JOIN player_games pg ON pg.game_id = gf.game_id
+            UNION ALL
+            SELECT 'passed_pawn',            gf.had_passed_pawn,    pg.result
+              FROM game_flags gf JOIN player_games pg ON pg.game_id = gf.game_id
+            UNION ALL
+            SELECT 'king_exposed',           gf.had_king_exposed,   pg.result
+              FROM game_flags gf JOIN player_games pg ON pg.game_id = gf.game_id
+        )
+        GROUP BY concept, present
+        ORDER BY concept, present
+    " --params [$username, $username])
+
+    let positional_anomalies = (open $db | query db "
+        SELECT concept_name, COUNT(*) as anomalies,
+               ROUND(AVG(CAST(hurt_player AS REAL)), 3) as hurt_rate,
+               ROUND(AVG(z_score), 2) as avg_z
+        FROM move_anomalies
+        WHERE username = ?
+          AND concept_name IN ('outpost','open_file','passed_pawn','king_exposed',
+                               'skewer','discovered_attack')
+        GROUP BY concept_name
+        ORDER BY anomalies DESC
+    " --params [$username])
+
+    {
+        player:                $username
+        eval_components:       $eval_components
+        positional_win_rates:  $positional_win_rates
+        positional_anomalies:  $positional_anomalies
+        notes: "avg_king_safety_cp: positive = own king is safer. phase_bucket: 0=opening 1=midgame 2=late_mid 3=endgame. positional win rates: flags cover either side — king_exposed=1 in a game means some king was exposed, not necessarily the player's. Re-run derive-coach after plugin update for outpost/open_file/passed_pawn anomaly data."
+    } | to json
+}
+
 # AI Socratic coaching for the key moments in a game.
 # Requires nu-agent at ../nu-agent/nu-agent and the chess_coach contract.
 def "main coach-review" [
@@ -777,9 +1016,12 @@ USAGE:  nu nuchessdb.nu <command> [options]
 
   derive-coach <username>         Compute coaching baselines and anomalies
     --min-games <n>                 Min samples before trusting a baseline (default 25)
-  coach-profile <username>        Coaching profile: concepts, phase stats, anomalies
+  coach-profile <username>        Full coaching profile: concepts, phase stats, anomalies
     --examples <n>                  Position examples per concept (default 3)
     --json                          Output raw JSON for LLM consumption
+  coach-profile-tactical <username>  Tactical drill-down: fork/pin/hanging by phase, win rates
+  coach-profile-precision <username> Precision drill-down: swing baselines, blunder trends, transitions
+  coach-profile-position <username>  Positional drill-down: eval components, positional flag win rates
   coach-review <game_id>          AI Socratic coaching for key moments
     --perspective white|black       Which side to coach (default white)
   validate-gate <username> <game_id>  Show and consume unreviewed anomalies"

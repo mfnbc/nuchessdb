@@ -220,6 +220,8 @@ pub struct StateVector {
     pub has_outpost: bool,
     pub open_file: bool,
     pub has_passed_pawn: bool,
+    pub has_skewer: bool,
+    pub has_discovered: bool,
 }
 
 /// Encode a position into a compact state ID from the sensor report and groups.
@@ -245,19 +247,23 @@ pub fn encode_state(sensor: &crate::eval::sensor::SensorReport, groups: &crate::
     let has_outpost = !sensor.positional.outposts.is_empty();
     let open_file = !sensor.positional.open_files.is_empty();
     let has_passed_pawn = !sensor.positional.passed_pawns.is_empty();
+    let has_skewer = !sensor.tactical.skewers.is_empty();
+    let has_discovered = !sensor.tactical.discovered.is_empty();
 
     // Pack into u16 bitfield
     let mut id: u16 = 0;
-    id |= (phase_bits as u16) & 0x3;          // bits 0-1
-    id |= ((material_sign + 2) as u16 & 0x7) << 2; // bits 2-4 (shifted to 0-4)
-    id |= (king_exposed as u16) << 5;          // bit 5
-    id |= (in_check as u16) << 6;              // bit 6
-    id |= (has_fork as u16) << 7;              // bit 7
-    id |= (has_pin as u16) << 8;               // bit 8
-    id |= (has_hanging as u16) << 9;           // bit 9
-    id |= (has_outpost as u16) << 10;          // bit 10
-    id |= (open_file as u16) << 11;            // bit 11
-    id |= (has_passed_pawn as u16) << 12;      // bit 12
+    id |= (phase_bits as u16) & 0x3;               // bits 0-1
+    id |= ((material_sign + 2) as u16 & 0x7) << 2; // bits 2-4
+    id |= (king_exposed as u16) << 5;               // bit 5
+    id |= (in_check as u16) << 6;                   // bit 6
+    id |= (has_fork as u16) << 7;                   // bit 7
+    id |= (has_pin as u16) << 8;                    // bit 8
+    id |= (has_hanging as u16) << 9;                // bit 9
+    id |= (has_outpost as u16) << 10;               // bit 10
+    id |= (open_file as u16) << 11;                 // bit 11
+    id |= (has_passed_pawn as u16) << 12;           // bit 12
+    id |= (has_skewer as u16) << 13;                // bit 13
+    id |= (has_discovered as u16) << 14;            // bit 14
 
     StateVector {
         state_id: id,
@@ -271,6 +277,8 @@ pub fn encode_state(sensor: &crate::eval::sensor::SensorReport, groups: &crate::
         has_outpost,
         open_file,
         has_passed_pawn,
+        has_skewer,
+        has_discovered,
     }
 }
 

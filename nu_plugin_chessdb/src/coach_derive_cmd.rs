@@ -76,14 +76,19 @@ fn encode_move_states(rows: &[MoveRecord], span: nu_protocol::Span) -> Vec<Value
         if let Some(sid) = r.state_id {
             let phase = (sid & 0x3) as u8;
             return Value::record(nu_protocol::record! {
-                "game_id" => Value::string(&r.game_id, span),
-                "ply" => Value::int(r.ply, span),
-                "state_id" => Value::int(sid as i64, span),
-                "phase_bucket" => Value::int(phase as i64, span),
-                "has_fork" => Value::bool((sid >> 7) & 1 != 0, span),
-                "has_pin" => Value::bool((sid >> 8) & 1 != 0, span),
-                "has_hanging" => Value::bool((sid >> 9) & 1 != 0, span),
-                "king_exposed" => Value::bool((sid >> 5) & 1 != 0, span),
+                "game_id"        => Value::string(&r.game_id, span),
+                "ply"            => Value::int(r.ply, span),
+                "state_id"       => Value::int(sid as i64, span),
+                "phase_bucket"   => Value::int(phase as i64, span),
+                "king_exposed"   => Value::bool((sid >> 5) & 1 != 0, span),
+                "has_fork"       => Value::bool((sid >> 7) & 1 != 0, span),
+                "has_pin"        => Value::bool((sid >> 8) & 1 != 0, span),
+                "has_hanging"    => Value::bool((sid >> 9) & 1 != 0, span),
+                "has_outpost"    => Value::bool((sid >> 10) & 1 != 0, span),
+                "has_open_file"  => Value::bool((sid >> 11) & 1 != 0, span),
+                "has_passed_pawn"=> Value::bool((sid >> 12) & 1 != 0, span),
+                "has_skewer"     => Value::bool((sid >> 13) & 1 != 0, span),
+                "has_discovered" => Value::bool((sid >> 14) & 1 != 0, span),
             }, span);
         }
         // Slow path: re-parse FEN (fallback for rows without state_id)
@@ -108,14 +113,19 @@ fn encode_move_states(rows: &[MoveRecord], span: nu_protocol::Span) -> Vec<Value
         let sensor = crate::eval::build_sensor_report(chess.board(), &r.fen, &groups, &chess, phase, None);
         let state = crate::eval::encode_state(&sensor, &groups, phase);
         Value::record(nu_protocol::record! {
-            "game_id" => Value::string(&r.game_id, span),
-            "ply" => Value::int(r.ply, span),
-            "state_id" => Value::int(state.state_id as i64, span),
-            "phase_bucket" => Value::int(state.phase as i64, span),
-            "has_fork" => Value::bool(state.has_fork, span),
-            "has_pin" => Value::bool(state.has_pin, span),
-            "has_hanging" => Value::bool(state.has_hanging, span),
-            "king_exposed" => Value::bool(state.king_exposed, span),
+            "game_id"         => Value::string(&r.game_id, span),
+            "ply"             => Value::int(r.ply, span),
+            "state_id"        => Value::int(state.state_id as i64, span),
+            "phase_bucket"    => Value::int(state.phase as i64, span),
+            "king_exposed"    => Value::bool(state.king_exposed, span),
+            "has_fork"        => Value::bool(state.has_fork, span),
+            "has_pin"         => Value::bool(state.has_pin, span),
+            "has_hanging"     => Value::bool(state.has_hanging, span),
+            "has_outpost"     => Value::bool(state.has_outpost, span),
+            "has_open_file"   => Value::bool(state.open_file, span),
+            "has_passed_pawn" => Value::bool(state.has_passed_pawn, span),
+            "has_skewer"      => Value::bool(state.has_skewer, span),
+            "has_discovered"  => Value::bool(state.has_discovered, span),
         }, span)
     }).collect()
 }
@@ -160,20 +170,22 @@ fn compute_baselines(rows: &[MoveRecord], states: &[Value]) -> HashMap<(String, 
         // Always track overall eval swing
         baselines.entry((row.player.clone(), phase_bucket, "hugm_delta".into()))
             .or_insert_with(Welford::new).update(delta);
-        // Per-concept baselines: how does the player's eval swing differ
-        // when specific tactical patterns are present?
+        // Per-concept baselines: eval swing when each tactical/positional pattern is present.
         let s = &states[i];
-        if get_field_bool(s, "has_fork") {
-            baselines.entry((row.player.clone(), phase_bucket, "fork".into()))
-                .or_insert_with(Welford::new).update(delta);
-        }
-        if get_field_bool(s, "has_pin") {
-            baselines.entry((row.player.clone(), phase_bucket, "pin".into()))
-                .or_insert_with(Welford::new).update(delta);
-        }
-        if get_field_bool(s, "has_hanging") {
-            baselines.entry((row.player.clone(), phase_bucket, "hanging_piece".into()))
-                .or_insert_with(Welford::new).update(delta);
+        for (concept, flag) in &[
+            ("fork",             "has_fork"),
+            ("pin",              "has_pin"),
+            ("hanging_piece",    "has_hanging"),
+            ("outpost",          "has_outpost"),
+            ("open_file",        "has_open_file"),
+            ("passed_pawn",      "has_passed_pawn"),
+            ("skewer",           "has_skewer"),
+            ("discovered_attack","has_discovered"),
+        ] {
+            if get_field_bool(s, flag) {
+                baselines.entry((row.player.clone(), phase_bucket, concept.to_string()))
+                    .or_insert_with(Welford::new).update(delta);
+            }
         }
     }
     baselines.into_iter().map(|((p, ph, cn), w)| ((p, ph, cn), (w.mean, w.std_dev()))).collect()
@@ -193,12 +205,16 @@ fn detect_anomalies(rows: &[MoveRecord], states: &[Value], baselines: &HashMap<(
         let phase_bucket = states.get(i).and_then(|v| get_field_i64(v, "phase_bucket")).unwrap_or(1) as u8;
         let state_id = states.get(i).and_then(|v| get_field_i64(v, "state_id")).unwrap_or(0);
         let s = &states[i];
-        // Check per-concept baselines when the concept is present
-        let check_concepts: [(&str, bool); 4] = [
-            ("hugm_delta", true),  // always check overall
-            ("fork", get_field_bool(s, "has_fork")),
-            ("pin", get_field_bool(s, "has_pin")),
-            ("hanging_piece", get_field_bool(s, "has_hanging")),
+        let check_concepts: [(&str, bool); 9] = [
+            ("hugm_delta",       true),
+            ("fork",             get_field_bool(s, "has_fork")),
+            ("pin",              get_field_bool(s, "has_pin")),
+            ("hanging_piece",    get_field_bool(s, "has_hanging")),
+            ("outpost",          get_field_bool(s, "has_outpost")),
+            ("open_file",        get_field_bool(s, "has_open_file")),
+            ("passed_pawn",      get_field_bool(s, "has_passed_pawn")),
+            ("skewer",           get_field_bool(s, "has_skewer")),
+            ("discovered_attack",get_field_bool(s, "has_discovered")),
         ];
         for (concept, should_check) in &check_concepts {
             if !should_check { continue; }
