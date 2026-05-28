@@ -422,23 +422,20 @@ def "main coach-profile" [
         WHERE g.white = ? OR g.black = ?
     " --params [$username, $username] | first | get cnt | into int)
 
+    # result is stored from the syncing player's perspective (chess.com style):
+    # 'win' = player won; draws = agreed/repetition/stalemate/insufficient/timevsinsufficient/50move;
+    # everything else (resigned/checkmated/timeout/abandoned) = player lost.
     let wl_by_color = (open $db | query db "
         SELECT color, COUNT(*) as games,
-               SUM(is_win) as wins, SUM(is_draw) as draws, SUM(is_loss) as losses,
-               ROUND(100.0 * SUM(is_win) / COUNT(*), 1) as win_pct,
-               ROUND(100.0 * SUM(is_draw) / COUNT(*), 1) as draw_pct
+               SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) as wins,
+               SUM(CASE WHEN result IN ('agreed','repetition','stalemate','insufficient','timevsinsufficient','50move') THEN 1 ELSE 0 END) as draws,
+               SUM(CASE WHEN result NOT IN ('win','agreed','repetition','stalemate','insufficient','timevsinsufficient','50move') THEN 1 ELSE 0 END) as losses,
+               ROUND(100.0 * SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) / COUNT(*), 1) as win_pct,
+               ROUND(100.0 * SUM(CASE WHEN result IN ('agreed','repetition','stalemate','insufficient','timevsinsufficient','50move') THEN 1 ELSE 0 END) / COUNT(*), 1) as draw_pct
         FROM (
-            SELECT 'white' as color,
-                   CASE WHEN result = '1-0'     THEN 1 ELSE 0 END as is_win,
-                   CASE WHEN result = '1/2-1/2' THEN 1 ELSE 0 END as is_draw,
-                   CASE WHEN result = '0-1'     THEN 1 ELSE 0 END as is_loss
-            FROM games WHERE white = ?
+            SELECT 'white' as color, result FROM games WHERE white = ?
             UNION ALL
-            SELECT 'black' as color,
-                   CASE WHEN result = '0-1'     THEN 1 ELSE 0 END,
-                   CASE WHEN result = '1/2-1/2' THEN 1 ELSE 0 END,
-                   CASE WHEN result = '1-0'     THEN 1 ELSE 0 END
-            FROM games WHERE black = ?
+            SELECT 'black' as color, result FROM games WHERE black = ?
         ) GROUP BY color
     " --params [$username, $username])
 
