@@ -694,32 +694,79 @@ def "main coach-profile-tactical" [
         ORDER BY ms.phase_bucket, hurt_rate DESC
     " --params [$username])
 
-    let win_rates = (open $db | query db "
-        WITH game_flags AS (
+    # Split by whose move produced the flag: player's moves vs opponent's moves.
+    # player flags = state_id of positions reached after the player moved.
+    # opponent flags = state_id of positions reached after the opponent moved.
+    let win_rates_raw = (open $db | query db "
+        WITH player_flags AS (
             SELECT ms.game_id,
                    MAX((ms.state_id >> 7) & 1) as had_fork,
                    MAX((ms.state_id >> 8) & 1) as had_pin,
                    MAX((ms.state_id >> 9) & 1) as had_hanging
-            FROM move_states ms GROUP BY ms.game_id
+            FROM move_states ms
+            JOIN moves m ON m.game_id = ms.game_id AND m.ply = ms.ply
+            JOIN games g ON g.game_id = ms.game_id
+            WHERE (g.white = ? AND m.color = 'white') OR (g.black = ? AND m.color = 'black')
+            GROUP BY ms.game_id
+        ),
+        opp_flags AS (
+            SELECT ms.game_id,
+                   MAX((ms.state_id >> 7) & 1) as had_fork,
+                   MAX((ms.state_id >> 8) & 1) as had_pin,
+                   MAX((ms.state_id >> 9) & 1) as had_hanging
+            FROM move_states ms
+            JOIN moves m ON m.game_id = ms.game_id AND m.ply = ms.ply
+            JOIN games g ON g.game_id = ms.game_id
+            WHERE (g.white = ? AND m.color = 'black') OR (g.black = ? AND m.color = 'white')
+            GROUP BY ms.game_id
         ),
         player_games AS (
             SELECT game_id, result FROM games WHERE white = ? OR black = ?
         )
-        SELECT concept, present, COUNT(*) as games,
+        SELECT concept, who, present, COUNT(*) as games,
                ROUND(100.0 * SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) / COUNT(*), 1) as win_pct
         FROM (
-            SELECT 'fork' as concept, gf.had_fork as present, pg.result
-              FROM game_flags gf JOIN player_games pg ON pg.game_id = gf.game_id
+            SELECT 'fork'          as concept, 'player'   as who, pf.had_fork    as present, pg.result FROM player_flags pf JOIN player_games pg ON pg.game_id = pf.game_id
             UNION ALL
-            SELECT 'pin', gf.had_pin, pg.result
-              FROM game_flags gf JOIN player_games pg ON pg.game_id = gf.game_id
+            SELECT 'pin',                       'player',          pf.had_pin,                 pg.result FROM player_flags pf JOIN player_games pg ON pg.game_id = pf.game_id
             UNION ALL
-            SELECT 'hanging_piece', gf.had_hanging, pg.result
-              FROM game_flags gf JOIN player_games pg ON pg.game_id = gf.game_id
+            SELECT 'hanging_piece',             'player',          pf.had_hanging,             pg.result FROM player_flags pf JOIN player_games pg ON pg.game_id = pf.game_id
+            UNION ALL
+            SELECT 'fork',                      'opponent',        of.had_fork,                pg.result FROM opp_flags of JOIN player_games pg ON pg.game_id = of.game_id
+            UNION ALL
+            SELECT 'pin',                       'opponent',        of.had_pin,                 pg.result FROM opp_flags of JOIN player_games pg ON pg.game_id = of.game_id
+            UNION ALL
+            SELECT 'hanging_piece',             'opponent',        of.had_hanging,             pg.result FROM opp_flags of JOIN player_games pg ON pg.game_id = of.game_id
         )
-        GROUP BY concept, present
-        ORDER BY concept, present
-    " --params [$username, $username])
+        GROUP BY concept, who, present
+        ORDER BY concept, who, present
+    " --params [$username, $username, $username, $username, $username, $username])
+
+    # Pivot: nest present=0/1 and player/opponent under each concept.
+    let stat = { |rows who flag|
+        let r = ($rows | where who == $who | where present == $flag)
+        if ($r | is-not-empty) {
+            let f = ($r | first)
+            { games: $f.games, win_pct: $f.win_pct }
+        } else {
+            { games: 0, win_pct: null }
+        }
+    }
+    let win_rates = (
+        $win_rates_raw
+        | get concept
+        | uniq
+        | each { |c|
+            let rows = ($win_rates_raw | where concept == $c)
+            {
+                concept:                $c
+                player_has_pattern:     (do $stat $rows "player"   1)
+                player_lacks_pattern:   (do $stat $rows "player"   0)
+                opponent_has_pattern:   (do $stat $rows "opponent" 1)
+                opponent_lacks_pattern: (do $stat $rows "opponent" 0)
+            }
+        }
+    )
 
     let worst_games = (open $db | query db "
         SELECT ma.game_id,
@@ -739,7 +786,7 @@ def "main coach-profile-tactical" [
         player:               $username
         concept_summary:      $concept_summary
         phase_breakdown:      $phase_breakdown
-        win_rate_by_flag:     $win_rates
+        pattern_win_impact:   $win_rates
         worst_tactical_games: $worst_games
         notes: "phase_bucket: 0=opening(ply≤12) 1=midgame(≤30) 2=late_mid(≤50) 3=endgame. Re-run derive-coach to populate skewer/discovered_attack."
     } | to json
