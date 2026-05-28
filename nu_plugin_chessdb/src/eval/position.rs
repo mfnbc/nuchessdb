@@ -1584,6 +1584,35 @@ fn outposts_to_typed(board: &shakmaty::Board, examples: &[(Square, Role, Square)
     }).collect()
 }
 
+fn pins_to_typed(board: &shakmaty::Board, examples: &[(Square, Square, Square)]) -> Vec<crate::eval::concept_types::Pin> {
+    use crate::eval::concept_types::PinType;
+    examples.iter().filter_map(|(pinner_sq, pinned_sq, shielded_sq)| {
+        let attacker = board_to_piece_ref(board, *pinner_sq)?;
+        let pinned   = board_to_piece_ref(board, *pinned_sq)?;
+        let shielded = board_to_piece_ref(board, *shielded_sq)?;
+        let pin_type = if shielded.role == "King" { PinType::Absolute } else { PinType::Relative };
+        Some(crate::eval::concept_types::Pin { attacker, pinned, shielded, pin_type })
+    }).collect()
+}
+
+fn skewers_to_typed(board: &shakmaty::Board, examples: &[(Square, Square, Square)]) -> Vec<crate::eval::concept_types::Skewer> {
+    examples.iter().filter_map(|(attacker_sq, front_sq, back_sq)| {
+        let attacker = board_to_piece_ref(board, *attacker_sq)?;
+        let front    = board_to_piece_ref(board, *front_sq)?;
+        let behind   = board_to_piece_ref(board, *back_sq)?;
+        Some(crate::eval::concept_types::Skewer { attacker, front, behind })
+    }).collect()
+}
+
+fn discovered_to_typed(board: &shakmaty::Board, examples: &[(Square, Square, Square)]) -> Vec<crate::eval::concept_types::DiscoveredAttack> {
+    examples.iter().filter_map(|(blocker_sq, slider_sq, target_sq)| {
+        let mover   = board_to_piece_ref(board, *blocker_sq)?;
+        let attacker = board_to_piece_ref(board, *slider_sq)?;
+        let target  = board_to_piece_ref(board, *target_sq)?;
+        Some(crate::eval::concept_types::DiscoveredAttack { mover, attacker, target })
+    }).collect()
+}
+
 // ── 1400 ELO extractors ──
 
 fn extract_passed_pawns(board: &shakmaty::Board) -> Vec<PassedPawn> {
@@ -2679,12 +2708,19 @@ pub fn build_sensor_report(board: &shakmaty::Board, fen: &str, groups: &EvalGrou
     // Exchange chains from the graph
     let exchanges: Vec<ExchangeChain> = Vec::new(); // populated per-capture in a follow-up
 
-    // Tactical report from the threat graph
+    // Tactical report — use existing detect_* functions for pins/skewers/discovered.
+    let (_, pin_ex_us)  = detect_pins(board, us);
+    let (_, pin_ex_them)= detect_pins(board, them);
+    let (_, skew_ex_us) = detect_skewers(board, us);
+    let (_, skew_ex_them)= detect_skewers(board, them);
+    let (_, disc_ex_us) = detect_discovered(board, us);
+    let (_, disc_ex_them)= detect_discovered(board, them);
+
     let tactical = TacticalReport {
-        forks: Vec::new(),         // replaced by evaluated_forks
-        pins: Vec::new(),          // TODO: ThreatGraph pin detection
-        skewers: Vec::new(),       // TODO: ThreatGraph skewer detection
-        discovered: Vec::new(),    // TODO: ThreatGraph discovered detection
+        forks: Vec::new(),  // replaced by evaluated_forks
+        pins: { let mut v = pins_to_typed(board, &pin_ex_us); v.extend(pins_to_typed(board, &pin_ex_them)); v },
+        skewers: { let mut v = skewers_to_typed(board, &skew_ex_us); v.extend(skewers_to_typed(board, &skew_ex_them)); v },
+        discovered: { let mut v = discovered_to_typed(board, &disc_ex_us); v.extend(discovered_to_typed(board, &disc_ex_them)); v },
         hanging: graph.find_hanging(),
     };
 
@@ -3228,7 +3264,7 @@ mod tests {
     fn compares_engine_score_when_provided() {
         let base = analyze_fen("8/8/8/8/8/7k/8/6K1 w - - 0 1").expect("FEN should parse");
         let record =
-            analyze_fen_with_engine_score("8/8/8/8/8/7k/8/6K1 w - - 0 1", Some(base.final_score))
+            analyze_fen_with_engine_score("8/8/8/8/8/7k/8/6K1 w - - 0 1", Some(base.final_score), None)
                 .expect("FEN should parse");
         assert_eq!(record.engine_score, Some(base.final_score));
         assert!(record.checks.matches_final);
@@ -3265,6 +3301,8 @@ mod tests {
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
         assert!(pins_us >= 1);
+        // sensor.tactical.pins must also be populated (not left as Vec::new())
+        assert!(!record.sensor_report.tactical.pins.is_empty(), "sensor.tactical.pins was empty — bridge from detect_pins is broken");
     }
 
     #[test]
