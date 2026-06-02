@@ -1074,11 +1074,11 @@ def "main coach-profile-opening" [
             print ($eco_families | table)
         }
         if ($weakest | is-not-empty) {
-            print $"\nWeakest openings (≥($min_games) games):"
+            print $"\nWeakest openings (>= ($min_games) games):"
             print ($weakest | table)
         }
         if ($strongest | is-not-empty) {
-            print $"\nStrongest openings (≥($min_games) games):"
+            print $"\nStrongest openings (>= ($min_games) games):"
             print ($strongest | table)
         }
         if ($anomaly_by_opening | is-not-empty) {
