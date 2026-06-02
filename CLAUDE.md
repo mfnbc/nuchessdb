@@ -37,6 +37,20 @@ first — a ~40,000× data transfer increase for no benefit.
 **Rule:** if a query groups + aggregates, the CASE WHEN lives in SQL. Only bring
 rows into Nushell when you need per-row transformation that SQL cannot express.
 
+## Nu 0.111 job control
+
+`job spawn` is the correct command (experimental since 0.104, stable in 0.111).
+`job send` / `job recv` pass structured records between threads without blocking.
+There is no `job run` command — that does not exist.
+
+`try/catch/finally` works as expected: `finally` runs unconditionally regardless
+of whether the `try` body succeeded or threw.
+
+**Inline `let` mid-pipeline does not work in 0.111.** The parser rejects
+`$data | let x = $in | ...` with "Assignment operations require a variable."
+`let` is still a statement. Write `let x = ($data | ...)` on its own line, then
+continue with `$data | ...`. There is no mid-pipeline binding syntax.
+
 ## SQL string construction in db-merge
 
 `db-merge` builds INSERT statements by concatenating `$table` and `$columns`
