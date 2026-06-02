@@ -48,14 +48,9 @@ impl ThreatGraph {
                                  | board.attacks_to(sq, Color::Black, occupied);
         }
 
-        ThreatGraph {
-            attacks_from,
-            attackers_to,
-            pieces,
-            turn: chess.turn(),
-            kings: (board.king_of(Color::White), board.king_of(Color::Black)),
-            board: board.clone(),
-        }
+        let kings = (board.king_of(Color::White), board.king_of(Color::Black));
+        let turn = chess.turn();
+        ThreatGraph { attacks_from, attackers_to, pieces, turn, kings, board }
     }
 
     /// All pieces of the given color, with their squares.

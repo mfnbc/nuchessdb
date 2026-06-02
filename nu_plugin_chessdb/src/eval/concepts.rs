@@ -11,8 +11,9 @@ pub struct Concept {
 }
 
 /// Extract all detected concepts from an EvalGroups, ranked by severity descending.
-pub fn extract_concepts(groups: &EvalGroups, _side_to_move: &str) -> Vec<Concept> {
+pub fn extract_concepts(groups: &EvalGroups, side_to_move: &str) -> Vec<Concept> {
     let mut concepts = Vec::new();
+    let (us_color, them_color) = if side_to_move == "white" { ("white", "black") } else { ("black", "white") };
 
     // --- Material (ELO 600+) ---
     let material_imbalance = groups.material_total.value;
@@ -32,15 +33,16 @@ pub fn extract_concepts(groups: &EvalGroups, _side_to_move: &str) -> Vec<Concept
     if bb >= 2 { concepts.push(Concept { name: "bishop_pair".into(), severity: 40, side: "black".into(), phrase: "Black has the bishop pair".into(), elo_min: 1800 }); }
 
     // Tactical: forks (1000+), pins (1200+), skewers (1200+), discovered (1400+)
+    // _us keys are relative to side_to_move, _them keys are relative to the opponent
     for (key, label, weight, elo, name) in [
-        ("forks_us","white",80i64,1000,"fork"),
-        ("forks_them","black",80,1000,"fork"),
-        ("pins_us","white",50,1200,"pin"),
-        ("pins_them","black",50,1200,"pin"),
-        ("skewers_us","white",45,1200,"skewer"),
-        ("skewers_them","black",45,1200,"skewer"),
-        ("discovered_us","white",60,1400,"discovered_attack"),
-        ("discovered_them","black",60,1400,"discovered_attack"),
+        ("forks_us",        us_color,   80i64, 1000, "fork"),
+        ("forks_them",      them_color, 80,    1000, "fork"),
+        ("pins_us",         us_color,   50,    1200, "pin"),
+        ("pins_them",       them_color, 50,    1200, "pin"),
+        ("skewers_us",      us_color,   45,    1200, "skewer"),
+        ("skewers_them",    them_color, 45,    1200, "skewer"),
+        ("discovered_us",   us_color,   60,    1400, "discovered_attack"),
+        ("discovered_them", them_color, 60,    1400, "discovered_attack"),
     ] {
         if let Some(v) = groups.tactical.terms.get(key).and_then(|v| v.as_i64()) {
             if v > 0 {
@@ -61,22 +63,22 @@ pub fn extract_concepts(groups: &EvalGroups, _side_to_move: &str) -> Vec<Concept
 
     // Pawn majority (1800+) and breaks (1800+)
     if let Some(v) = groups.pawn_structure.terms.get("majority_us").and_then(|v| v.as_i64()) {
-        if v > 0 { concepts.push(Concept { name: "pawn_majority".into(), severity: v * 20, side: "white".into(), phrase: "White has a pawn majority".into(), elo_min: 1800 }); }
+        if v > 0 { concepts.push(Concept { name: "pawn_majority".into(), severity: v * 20, side: us_color.into(), phrase: format!("{} has a pawn majority", us_color), elo_min: 1800 }); }
     }
     if let Some(v) = groups.pawn_structure.terms.get("majority_them").and_then(|v| v.as_i64()) {
-        if v > 0 { concepts.push(Concept { name: "pawn_majority".into(), severity: v * 20, side: "black".into(), phrase: "Black has a pawn majority".into(), elo_min: 1800 }); }
+        if v > 0 { concepts.push(Concept { name: "pawn_majority".into(), severity: v * 20, side: them_color.into(), phrase: format!("{} has a pawn majority", them_color), elo_min: 1800 }); }
     }
     if let Some(v) = groups.pawn_structure.terms.get("pawn_breaks").and_then(|v| v.as_i64()) {
-        if v > 0 { concepts.push(Concept { name: "pawn_break".into(), severity: v * 30, side: "white".into(), phrase: format!("{} pawn break candidate(s)", v), elo_min: 1800 }); }
+        if v > 0 { concepts.push(Concept { name: "pawn_break".into(), severity: v * 30, side: us_color.into(), phrase: format!("{} pawn break candidate(s)", v), elo_min: 1800 }); }
     }
 
     // Minority attack (ELO 2000+)
     if let Some(v) = groups.pawn_structure.terms.get("minority_attack").and_then(|v| v.as_i64()) {
-        if v > 0 { concepts.push(Concept { name: "minority_attack".into(), severity: v * 35, side: "white".into(), phrase: "White has a minority attack".into(), elo_min: 2000 }); }
+        if v > 0 { concepts.push(Concept { name: "minority_attack".into(), severity: v * 35, side: us_color.into(), phrase: format!("{} has a minority attack", us_color), elo_min: 2000 }); }
     }
 
     // Outposts (ELO 1600+)
-    for (key, label) in [("outposts_us","white"), ("outposts_them","black")] {
+    for (key, label) in [("outposts_us", us_color), ("outposts_them", them_color)] {
         if let Some(v) = groups.piece_activity.terms.get(key).and_then(|v| v.as_i64()) {
             if v > 0 { concepts.push(Concept { name: "outpost".into(), severity: v * 40, side: label.into(), phrase: format!("{} has {} outpost(s)", label, v), elo_min: 1600 }); }
         }
@@ -84,17 +86,18 @@ pub fn extract_concepts(groups: &EvalGroups, _side_to_move: &str) -> Vec<Concept
 
     // Rook activity (ELO 1400+)
     if let Some(v) = groups.piece_activity.terms.get("rook_open_file_us").and_then(|v| v.as_i64()) {
-        if v > 0 { concepts.push(Concept { name: "rook_open_file".into(), severity: v * 25, side: "white".into(), phrase: "White has rook(s) on open file(s)".into(), elo_min: 1400 }); }
+        if v > 0 { concepts.push(Concept { name: "rook_open_file".into(), severity: v * 25, side: us_color.into(), phrase: format!("{} has rook(s) on open file(s)", us_color), elo_min: 1400 }); }
     }
     if let Some(v) = groups.piece_activity.terms.get("rook_seventh_us").and_then(|v| v.as_i64()) {
-        if v > 0 { concepts.push(Concept { name: "rook_seventh".into(), severity: v * 30, side: "white".into(), phrase: "White has a rook on the 7th rank".into(), elo_min: 1400 }); }
+        if v > 0 { concepts.push(Concept { name: "rook_seventh".into(), severity: v * 30, side: us_color.into(), phrase: format!("{} has a rook on the 7th rank", us_color), elo_min: 1400 }); }
     }
 
     // King safety (ELO 1000-1400+)
     if let Some(true) = groups.king_safety.terms.get("in_check").and_then(|v| v.as_bool()) {
-        concepts.push(Concept { name: "king_in_check".into(), severity: 100, side: "neutral".into(), phrase: "The king is in check!".into(), elo_min: 1000 });
+        concepts.push(Concept { name: "king_in_check".into(), severity: 100, side: us_color.into(), phrase: format!("{}'s king is in check!", us_color), elo_min: 1000 });
     }
     if groups.king_safety.blended.abs() > 40 {
+        // blended < 0 → White's king is penalised (exposed); > 0 → Black's king is penalised
         let (side, phrase) = if groups.king_safety.blended < 0 {
             ("white", "White's king is exposed".into())
         } else { ("black", "Black's king is exposed".into()) };
@@ -102,25 +105,31 @@ pub fn extract_concepts(groups: &EvalGroups, _side_to_move: &str) -> Vec<Concept
     }
 
     // Passed pawns (ELO 1400+)
-    for (key, label) in [("passed_us","white"), ("passed_them","black")] {
+    for (key, label) in [("passed_us", us_color), ("passed_them", them_color)] {
         if let Some(v) = groups.passed_pawns.terms.get(key).and_then(|v| v.as_i64()) {
             if v > 0 { concepts.push(Concept { name: "passed_pawn".into(), severity: v * 50, side: label.into(), phrase: format!("{} has {} passed pawn(s)", label, v), elo_min: 1400 }); }
         }
     }
 
     // Development (ELO 1400+)
+    // development.blended > 0 means `us` (side to move) has the advantage
     if groups.development.blended.abs() > 20 {
         let (side, phrase) = if groups.development.blended > 0 {
-            ("white", "White has a development advantage".into())
-        } else { ("black", "Black has a development advantage".into()) };
+            (us_color, format!("{} has a development advantage", us_color))
+        } else { (them_color, format!("{} has a development advantage", them_color)) };
         concepts.push(Concept { name: "development".into(), severity: groups.development.blended.abs(), side: side.into(), phrase, elo_min: 1400 });
     }
 
     // Center control (ELO 1800+)
+    // center_control_us > 0 means `us` (side to move) controls the center
     if let Some(v) = groups.vector_features.terms.get("center_control_us").and_then(|v| v.as_i64()) {
         if v.abs() > 15 {
-            let (side, phrase) = if v > 0 { ("white", "White controls the center") } else { ("black", "Black controls the center") };
-            concepts.push(Concept { name: "center_control".into(), severity: v.abs(), side: side.into(), phrase: phrase.into(), elo_min: 1800 });
+            let (side, phrase) = if v > 0 {
+                (us_color, format!("{} controls the center", us_color))
+            } else {
+                (them_color, format!("{} controls the center", them_color))
+            };
+            concepts.push(Concept { name: "center_control".into(), severity: v.abs(), side: side.into(), phrase, elo_min: 1800 });
         }
     }
 

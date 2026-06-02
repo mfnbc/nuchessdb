@@ -1,6 +1,6 @@
 use serde::Serialize;
 use crate::eval::concept_types::*;
-use crate::eval::threat_graph::{EvaluatedFork, ExchangeChain};
+use crate::eval::threat_graph::EvaluatedFork;
 
 /// Full sensor report from a single position evaluation.
 /// Contains all detected concepts as typed structs, ready for JSON serialization.
@@ -15,9 +15,6 @@ pub struct SensorReport {
     /// Forks with SEE material consequence (from ThreatGraph)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub evaluated_forks: Vec<EvaluatedFork>,
-    /// Multi-capture exchange chains (from ThreatGraph)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub exchanges: Vec<ExchangeChain>,
     /// ELO-gated, ranked issues for coaching (from concepts.rs)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gated_issues: Vec<crate::eval::concepts::GatedIssue>,
@@ -29,15 +26,6 @@ pub struct SensorReport {
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct MaterialConceptReport {
     pub balance: Option<MaterialBalance>,
-    pub redundancy: Vec<PieceRedundancy>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct PieceRedundancy {
-    pub piece: String,
-    pub count: u8,
-    pub color: String,
-    pub penalty_cp: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]

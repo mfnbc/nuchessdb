@@ -4,7 +4,6 @@ use shakmaty::{attacks, fen::Fen, Bitboard, Chess, Color, File, Position, Rank, 
 
 use crate::eval::concept_types::*;
 use crate::eval::sensor::{TacticalReport, PositionalReport, SensorReport, AggregatedScores, MaterialConceptReport};
-use crate::eval::threat_graph::ExchangeChain;
 
 // Configurable constants (GUESS values) collected here for easier tuning.
 const TACTICAL_BASE_PINS: i64 = 50;
@@ -236,6 +235,18 @@ pub struct ScalarValue {
     pub factor: i64,
 }
 
+/// Raw detector output from tactical_score — Square-level examples threaded through
+/// EvalGroups so build_sensor_report can build typed structs without re-running detectors.
+#[derive(Debug, Default)]
+pub struct TacticalRaw {
+    pub pin_ex_us:    Vec<(Square, Square, Square)>,
+    pub pin_ex_them:  Vec<(Square, Square, Square)>,
+    pub skew_ex_us:   Vec<(Square, Square, Square)>,
+    pub skew_ex_them: Vec<(Square, Square, Square)>,
+    pub disc_ex_us:   Vec<(Square, Square, Square)>,
+    pub disc_ex_them: Vec<(Square, Square, Square)>,
+}
+
 #[derive(Debug, Serialize, Default)]
 pub struct EvalGroups {
     pub material: GroupValue,
@@ -253,6 +264,9 @@ pub struct EvalGroups {
     pub material_total: ScalarValue,
     pub positional_total: ScalarValue,
     pub tactical_total: ScalarValue,
+    /// Cached raw detector results — skipped during serialization.
+    #[serde(skip)]
+    pub tactical_raw: TacticalRaw,
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -1470,13 +1484,18 @@ fn detect_skewers(board: &shakmaty::Board, color: Color) -> (i64, Vec<(Square, S
                         cur_rank = nr;
                         let sq = Square::from_coords(cur_file, cur_rank);
                         let sq_bb = Bitboard::from(sq);
-                        if (board.by_color(enemy) & sq_bb).any() {
-                            found.push(sq);
-                        }
                         if (board.occupied() & sq_bb).any() {
-                            // blocked by any piece
+                            if (board.by_color(enemy) & sq_bb).any() {
+                                found.push(sq);
+                                if found.len() >= 2 {
+                                    break; // found both pieces, done
+                                }
+                                // continue ray past first enemy (it would move when skewered)
+                                continue;
+                            }
+                            break; // friendly piece blocks the ray
                         }
-                        continue;
+                        continue; // empty square, keep walking
                     }
                 }
                 break;
@@ -1778,13 +1797,14 @@ fn extract_pawn_breaks(groups: &EvalGroups) -> Vec<PawnBreak> {
     results
 }
 
-fn extract_minority_attack(groups: &EvalGroups) -> Option<MinorityAttack> {
+fn extract_minority_attack(groups: &EvalGroups, us: Color) -> Option<MinorityAttack> {
     let minority_flag = groups.pawn_structure.terms.get("minority_attack")
         .and_then(|v| v.as_i64()).unwrap_or(0);
     if minority_flag == 0 { return None; }
     let strength = groups.pawn_structure.terms.get("minority_attack_strength")
         .and_then(|v| v.as_i64()).unwrap_or(0);
-    Some(MinorityAttack { color: "white".into(), strength })
+    let color = if us.is_white() { "white" } else { "black" };
+    Some(MinorityAttack { color: color.into(), strength })
 }
 
 fn extract_development_info(board: &shakmaty::Board) -> Vec<DevelopmentInfo> {
@@ -1817,15 +1837,15 @@ fn extract_development_info(board: &shakmaty::Board) -> Vec<DevelopmentInfo> {
     results
 }
 
-fn tactical_score(board: &shakmaty::Board, us: Color, phase: u8) -> GroupValue {
+fn tactical_score(board: &shakmaty::Board, us: Color, phase: u8) -> (GroupValue, TacticalRaw) {
     let them = us.other();
-    let (pins_us, pin_ex_us) = detect_pins(board, us);
-    let (pins_them, pin_ex_them) = detect_pins(board, them);
-    let (forks_us, fork_ex_us) = detect_forks(board, us);
+    let (pins_us,    pin_ex_us)    = detect_pins(board, us);
+    let (pins_them,  pin_ex_them)  = detect_pins(board, them);
+    let (forks_us,   fork_ex_us)   = detect_forks(board, us);
     let (forks_them, fork_ex_them) = detect_forks(board, them);
-    let (skewers_us, skewer_ex_us) = detect_skewers(board, us);
-    let (skewers_them, skewer_ex_them) = detect_skewers(board, them);
-    let (disc_us, disc_ex_us) = detect_discovered(board, us);
+    let (skewers_us,   skew_ex_us)   = detect_skewers(board, us);
+    let (skewers_them, skew_ex_them) = detect_skewers(board, them);
+    let (disc_us,   disc_ex_us)   = detect_discovered(board, us);
     let (disc_them, disc_ex_them) = detect_discovered(board, them);
 
     // Tactical base weights (from configurable WEIGHTS)
@@ -1893,8 +1913,8 @@ fn tactical_score(board: &shakmaty::Board, us: Color, phase: u8) -> GroupValue {
     }
 
     // Skewers
-    if !skewer_ex_us.is_empty() {
-        let arr: Vec<serde_json::Value> = skewer_ex_us
+    if !skew_ex_us.is_empty() {
+        let arr: Vec<serde_json::Value> = skew_ex_us
             .iter()
             .map(|(att, f, b)| {
                 let mut map = serde_json::Map::new();
@@ -1909,8 +1929,8 @@ fn tactical_score(board: &shakmaty::Board, us: Color, phase: u8) -> GroupValue {
             terms.insert("skewer_example_us".into(), first.clone());
         }
     }
-    if !skewer_ex_them.is_empty() {
-        let arr: Vec<serde_json::Value> = skewer_ex_them
+    if !skew_ex_them.is_empty() {
+        let arr: Vec<serde_json::Value> = skew_ex_them
             .iter()
             .map(|(att, f, b)| {
                 let mut map = serde_json::Map::new();
@@ -1994,7 +2014,12 @@ fn tactical_score(board: &shakmaty::Board, us: Color, phase: u8) -> GroupValue {
         }
     }
 
-    GroupValue { mg, eg, blended, terms } 
+    let raw = TacticalRaw {
+        pin_ex_us, pin_ex_them,
+        skew_ex_us, skew_ex_them,
+        disc_ex_us, disc_ex_them,
+    };
+    (GroupValue { mg, eg, blended, terms }, raw)
 }
 
 fn detect_outposts(board: &shakmaty::Board, color: Color) -> (i64, Vec<(Square, Role, Square)>) {
@@ -2623,7 +2648,7 @@ pub fn compute_groups(chess: &Chess, phase: u8, legal_move_count: usize) -> Eval
 
     let vector_features = vector_features_score(board, us, biased_phase(phase, w.phase_bias_vector_features));
     let strategic = strategic_score(board, us, legal_move_count, biased_phase(phase, w.phase_bias_strategic));
-    let tactical = tactical_score(board, us, phase);
+    let (tactical, tactical_raw) = tactical_score(board, us, phase);
 
     let scaling_factor = win_chance_scale(board, &material);
 
@@ -2640,6 +2665,7 @@ pub fn compute_groups(chess: &Chess, phase: u8, legal_move_count: usize) -> Eval
         vector_features,
         strategic,
         tactical,
+        tactical_raw,
         scaling: ScalarValue {
             value: 0,
             factor: scaling_factor,
@@ -2705,22 +2731,18 @@ pub fn build_sensor_report(board: &shakmaty::Board, fen: &str, groups: &EvalGrou
     let mut evaluated_forks = graph.find_forks(us);
     evaluated_forks.extend(graph.find_forks(them));
 
-    // Exchange chains from the graph
-    let exchanges: Vec<ExchangeChain> = Vec::new(); // populated per-capture in a follow-up
 
-    // Tactical report — use existing detect_* functions for pins/skewers/discovered.
-    let (_, pin_ex_us)  = detect_pins(board, us);
-    let (_, pin_ex_them)= detect_pins(board, them);
-    let (_, skew_ex_us) = detect_skewers(board, us);
-    let (_, skew_ex_them)= detect_skewers(board, them);
-    let (_, disc_ex_us) = detect_discovered(board, us);
-    let (_, disc_ex_them)= detect_discovered(board, them);
-
+    // Tactical report — reuse raw examples cached in groups.tactical_raw by tactical_score;
+    // no need to re-run the detectors.
+    let raw = &groups.tactical_raw;
     let tactical = TacticalReport {
-        forks: Vec::new(),  // replaced by evaluated_forks
-        pins: { let mut v = pins_to_typed(board, &pin_ex_us); v.extend(pins_to_typed(board, &pin_ex_them)); v },
-        skewers: { let mut v = skewers_to_typed(board, &skew_ex_us); v.extend(skewers_to_typed(board, &skew_ex_them)); v },
-        discovered: { let mut v = discovered_to_typed(board, &disc_ex_us); v.extend(discovered_to_typed(board, &disc_ex_them)); v },
+        forks: evaluated_forks.iter().map(|ef| Fork {
+            attacker: ef.attacker.clone(),
+            targets: ef.targets.clone(),
+        }).collect(),
+        pins:       { let mut v = pins_to_typed(board, &raw.pin_ex_us);   v.extend(pins_to_typed(board, &raw.pin_ex_them));   v },
+        skewers:    { let mut v = skewers_to_typed(board, &raw.skew_ex_us); v.extend(skewers_to_typed(board, &raw.skew_ex_them)); v },
+        discovered: { let mut v = discovered_to_typed(board, &raw.disc_ex_us); v.extend(discovered_to_typed(board, &raw.disc_ex_them)); v },
         hanging: graph.find_hanging(),
     };
 
@@ -2738,7 +2760,7 @@ pub fn build_sensor_report(board: &shakmaty::Board, fen: &str, groups: &EvalGrou
         isolated_pawns: extract_isolated_pawns(board),
         pawn_islands: extract_pawn_islands(board),
         pawn_breaks: extract_pawn_breaks(groups),
-        minority_attack: extract_minority_attack(groups),
+        minority_attack: extract_minority_attack(groups, us),
         king_exposure: {
             let exposures = extract_king_exposure(board);
             if exposures.len() >= 2 {
@@ -2757,7 +2779,7 @@ pub fn build_sensor_report(board: &shakmaty::Board, fen: &str, groups: &EvalGrou
 
     let material = {
         let balance = build_material_balance(groups);
-        MaterialConceptReport { balance, redundancy: Vec::new() }
+        MaterialConceptReport { balance }
     };
 
     // Build state_id from components before assembling SensorReport
@@ -2792,7 +2814,6 @@ pub fn build_sensor_report(board: &shakmaty::Board, fen: &str, groups: &EvalGrou
             chaos: chaos_coefficient(groups),
         },
         evaluated_forks,
-        exchanges,
         gated_issues,
         mate_in_1_exists: false,
     }
@@ -2815,10 +2836,11 @@ pub fn analyze_fen_with_engine_score(
     let normalized_fen =
         Fen::from_position(chess.clone(), shakmaty::EnPassantMode::Legal).to_string();
     let phase = compute_phase(chess.board());
-    let legal_move_count = chess.legal_moves().len();
+    let legal_moves = chess.legal_moves();
+    let legal_move_count = legal_moves.len();
     let groups = compute_groups(&chess, phase, legal_move_count);
     let mut sensor_report = build_sensor_report(chess.board(), fen, &groups, &chess, phase, player_elo);
-    sensor_report.mate_in_1_exists = chess.legal_moves().iter().any(|m| {
+    sensor_report.mate_in_1_exists = legal_moves.iter().any(|m| {
         let mut c = chess.clone();
         c.play_unchecked(m);
         c.is_checkmate()

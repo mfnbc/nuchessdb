@@ -191,7 +191,8 @@ fn compute_baselines(rows: &[MoveRecord], states: &[Value]) -> HashMap<(String, 
     baselines.into_iter().map(|((p, ph, cn), w)| ((p, ph, cn), (w.mean, w.std_dev()))).collect()
 }
 
-fn detect_anomalies(rows: &[MoveRecord], states: &[Value], baselines: &HashMap<(String, u8, String), (f64, f64)>, _min_games: i64, span: nu_protocol::Span) -> Vec<Value> {
+fn detect_anomalies(rows: &[MoveRecord], states: &[Value], baselines: &HashMap<(String, u8, String), (f64, f64)>, min_games: i64, span: nu_protocol::Span) -> Vec<Value> {
+    let _ = min_games; // baselines already filtered by compute_baselines; kept for API symmetry
     let mut prev_score: HashMap<(String, String), i64> = HashMap::new();
     let mut results = Vec::new();
     for (i, row) in rows.iter().enumerate() {
@@ -201,7 +202,7 @@ fn detect_anomalies(rows: &[MoveRecord], states: &[Value], baselines: &HashMap<(
             ((sd.abs() as f64), sd)
         } else { (0.0, 0) };
         prev_score.insert(game_key.clone(), row.hugm_score);
-        if delta < 5.0 { continue; }
+        if delta < 30.0 { continue; }
         let phase_bucket = states.get(i).and_then(|v| get_field_i64(v, "phase_bucket")).unwrap_or(1) as u8;
         let state_id = states.get(i).and_then(|v| get_field_i64(v, "state_id")).unwrap_or(0);
         let s = &states[i];
