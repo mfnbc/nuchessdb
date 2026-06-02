@@ -22,7 +22,7 @@ def db-merge [
     if ($records | is-empty) { return }
     let chunk_size = ([1, (900 // ($columns | length))] | math max)
     let col_sql   = ($columns | str join ", ")
-    let row_ph    = "(" + ($columns | each { "?" } | str join ", ") + ")"
+    let row_ph    = "(" + ("?" | repeat ($columns | length) | str join ", ") + ")"
     for chunk in ($records | chunks $chunk_size) {
         let all_ph = ($chunk | each { $row_ph } | str join ", ")
         let params = ($chunk | each { |r| $columns | each { |c| $r | get $c } } | flatten)
@@ -34,16 +34,16 @@ def win-rate-pivot [] {
     let rows = $in
     $rows | get concept | uniq | each { |c|
         let r = ($rows | where concept == $c)
-        let stat = { |who flag|
-            let m = ($r | where who == $who | where present == $flag)
-            if ($m | is-not-empty) { { games: $m.0.games, win_pct: $m.0.win_pct } } else { { games: 0, win_pct: null } }
+        let cell = { |who flag|
+            let m = ($r | where who == $who | where present == $flag).0?
+            { games: ($m.games? | default 0), win_pct: $m.win_pct? }
         }
         {
             concept:                $c
-            player_has_pattern:     (do $stat "player"   1)
-            player_lacks_pattern:   (do $stat "player"   0)
-            opponent_has_pattern:   (do $stat "opponent" 1)
-            opponent_lacks_pattern: (do $stat "opponent" 0)
+            player_has_pattern:     (do $cell "player"   1)
+            player_lacks_pattern:   (do $cell "player"   0)
+            opponent_has_pattern:   (do $cell "opponent" 1)
+            opponent_lacks_pattern: (do $cell "opponent" 0)
         }
     }
 }
@@ -227,11 +227,15 @@ def review-game [game_id: int, db: string] {
         ORDER BY m.ply ASC
     " --params [$game_id])
 
-    $raw | reduce -f {prev_arr: [0 0 0 0 0 0 0 0 0 0 0], rows: []} { |row, acc|
-        let arr   = try { $row.hugm_eval_arr | from json } catch { $acc.prev_arr }
-        let sign  = if $row.color == "black" { -1 } else { 1 }
-        let d     = ($arr | zip $acc.prev_arr | each { |p| ($p.0 - $p.1) * $sign })
-        let out = {
+    $raw | enumerate | each { |item|
+        let row      = $item.item
+        let prev_arr = if $item.index == 0 { [0 0 0 0 0 0 0 0 0 0 0] } else {
+            try { ($raw | get ($item.index - 1)).hugm_eval_arr | from json } catch { [0 0 0 0 0 0 0 0 0 0 0] }
+        }
+        let arr  = try { $row.hugm_eval_arr | from json } catch { $prev_arr }
+        let sign = if $row.color == "black" { -1 } else { 1 }
+        let d    = ($arr | zip $prev_arr | each { |p| ($p.0 - $p.1) * $sign })
+        {
             "#":         $row.move_number
             color:       $row.color
             move:        $row.san
@@ -245,8 +249,7 @@ def review-game [game_id: int, db: string] {
             Δ_space:     ($d | get 6)
             Δ_strategic: ($d | get 7)
         }
-        {prev_arr: $arr, rows: ($acc.rows | append $out)}
-    } | get rows
+    }
 }
 
 # ── Subcommands ───────────────────────────────────────────────────────────────
