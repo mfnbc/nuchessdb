@@ -631,8 +631,8 @@ def "main coach-profile" [
     }
 }
 
-# Focused tactical sub-profile: fork/pin/hanging anomaly breakdown, phase trends, and win-rate
-# correlation when those patterns appear on the board. Always outputs JSON.
+# Tactical sub-profile: fork/pin/hanging anomaly breakdown and win-rate correlation.
+# Phase trends, win-rates with/without each pattern. Always outputs JSON.
 def "main coach-profile-tactical" [
     username: string
     --db: string = "./chess.db"
@@ -740,8 +740,8 @@ def "main coach-profile-tactical" [
     } | to json
 }
 
-# Focused precision sub-profile: eval-swing baselines, blunder distribution by phase,
-# risky state transitions, and the top anomalies by z_score. Always outputs JSON.
+# Precision sub-profile: eval-swing baselines, blunder trends, and risky transitions.
+# Blunder distribution by phase, top anomalies by z_score. Always outputs JSON.
 def "main coach-profile-precision" [
     username: string
     --db: string = "./chess.db"
@@ -819,9 +819,8 @@ def "main coach-profile-precision" [
     } | to json
 }
 
-# Focused positional sub-profile: eval component trends (pawns/activity/king-safety),
-# win-rate when positional patterns are present, and positional concept anomalies.
-# Always outputs JSON.
+# Positional sub-profile: eval component trends (pawns/activity/king-safety).
+# Win-rate when positional patterns are present, positional concept anomalies. JSON.
 def "main coach-profile-position" [
     username: string
     --db: string = "./chess.db"
@@ -906,9 +905,8 @@ def "main coach-profile-position" [
     } | to json
 }
 
-# Opening repertoire sub-profile: top openings by color, ECO family win rates,
-# weakest openings by win%, and which openings correlate with the most anomalies.
-# Always outputs JSON.
+# Opening sub-profile: ECO repertoire, family win rates, weakest/strongest openings.
+# Which openings correlate with the most anomalies. Always outputs JSON.
 def "main coach-profile-opening" [
     username: string
     --db: string = "./chess.db"
@@ -1095,30 +1093,17 @@ def "main validate-gate" [
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main [] {
-    print "nuchessdb — chess database and coaching platform
-
-USAGE:  nu nuchessdb.nu <command> [options]
-        All commands accept --db <path>  (default: ./chess.db)
-
-  init                            Initialize database schema
-  sync <username>                 Download all chess.com games for a player
-    --limit <n>                     Only fetch the last n monthly archives
-  recent [n]                      Last n games (default 5)
-  review <game_id>                Move-by-move evaluation breakdown
-  explore <zobrist>               Move frequencies for a position
-  status                          Record counts and players in the database
-
-  derive-coach <username>         Compute coaching baselines and anomalies
-    --min-games <n>                 Min samples before trusting a baseline (default 25)
-  coach-profile <username>        Full coaching profile: concepts, phase stats, anomalies
-    --examples <n>                  Position examples per concept (default 3)
-    --json                          Output raw JSON for LLM consumption
-  coach-profile-tactical <username>  Tactical drill-down: fork/pin/hanging by phase, win rates
-  coach-profile-precision <username> Precision drill-down: swing baselines, blunder trends, transitions
-  coach-profile-position <username>  Positional drill-down: eval components, positional flag win rates
-  coach-profile-opening <username>   Opening repertoire: ECO win rates, weakest/strongest openings
-    --min-games <n>                    Min games per opening to include (default 10)
-  coach-review <game_id>          AI Socratic coaching for key moments
-    --perspective white|black       Which side to coach (default white)
-  validate-gate <username> <game_id>  Show and consume unreviewed anomalies"
+    print "nuchessdb — chess database and coaching platform\n"
+    print "USAGE:  nu nuchessdb.nu <command> [options]"
+    print "        All commands accept --db <path>  (default: ./chess.db)\n"
+    scope commands
+    | where name =~ "^main "
+    | sort-by name
+    | each { |cmd|
+        let short = ($cmd.name | str replace "main " "")
+        let first = ($cmd.description | lines).0? | default ""
+        let desc  = if ($first | is-empty) { "" } else { $"  ($first)" }
+        print $"  ($short | fill -a l -w 35)($desc)"
+    }
+    | ignore
 }
