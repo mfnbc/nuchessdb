@@ -37,19 +37,33 @@ first — a ~40,000× data transfer increase for no benefit.
 **Rule:** if a query groups + aggregates, the CASE WHEN lives in SQL. Only bring
 rows into Nushell when you need per-row transformation that SQL cannot express.
 
-## Nu 0.111 job control
+## Nu 0.111 specifics
 
-`job spawn` is the correct command (experimental since 0.104, stable in 0.111).
+**`job spawn`** is the correct command (experimental since 0.104).
 `job send` / `job recv` pass structured records between threads without blocking.
-There is no `job run` command — that does not exist.
+There is no `job run` — that does not exist.
 
-`try/catch/finally` works as expected: `finally` runs unconditionally regardless
-of whether the `try` body succeeded or threw.
+**`try/catch/finally`**: `finally` runs unconditionally regardless of success or
+failure in the `try` body.
 
-**Inline `let` mid-pipeline does not work in 0.111.** The parser rejects
-`$data | let x = $in | ...` with "Assignment operations require a variable."
-`let` is still a statement. Write `let x = ($data | ...)` on its own line, then
-continue with `$data | ...`. There is no mid-pipeline binding syntax.
+**Pass-through `let` (0.111+):** `let` without `=` is a pipeline pass-through —
+it binds `$in` to the variable name and forwards the value unchanged:
+```
+"hello" | let msg | str length   # → 5; $msg is now "hello"
+```
+This is distinct from statement-assignment (`let x = ...`). Do **not** use `=`
+in a pipeline context; `$data | let x = $in` fails at parse time.
+
+**`repeat` does not exist in Nu 0.111.** To generate N copies of a string use
+`1..N | each { "str" } | str join sep`. The `str expand` command exists but is
+for brace expansion (`{A,B}`) — not useful for SQL placeholder generation.
+
+**`match` over binary `if/else` on string values:**
+```
+let sign = match $row.color { "black" => -1, _ => 1 }
+```
+Use `match` when branching on a string/int/enum. Reserve `if/else` for boolean
+conditions or range checks.
 
 ## SQL string construction in db-merge
 

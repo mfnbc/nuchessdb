@@ -22,7 +22,7 @@ def db-merge [
     if ($records | is-empty) { return }
     let chunk_size = ([1, (900 // ($columns | length))] | math max)
     let col_sql   = ($columns | str join ", ")
-    let row_ph    = "(" + ("?" | repeat ($columns | length) | str join ", ") + ")"
+    let row_ph    = "(" + (1..($columns | length) | each { "?" } | str join ", ") + ")"
     for chunk in ($records | chunks $chunk_size) {
         let all_ph = ($chunk | each { $row_ph } | str join ", ")
         let params = ($chunk | each { |r| $columns | each { |c| $r | get $c } } | flatten)
@@ -233,7 +233,7 @@ def review-game [game_id: int, db: string] {
             try { ($raw | get ($item.index - 1)).hugm_eval_arr | from json } catch { [0 0 0 0 0 0 0 0 0 0 0] }
         }
         let arr  = try { $row.hugm_eval_arr | from json } catch { $prev_arr }
-        let sign = if $row.color == "black" { -1 } else { 1 }
+        let sign = match $row.color { "black" => -1, _ => 1 }
         let d    = ($arr | zip $prev_arr | each { |p| ($p.0 - $p.1) * $sign })
         {
             "#":         $row.move_number
@@ -1001,8 +1001,12 @@ def "main coach-review" [
     if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
 
     let game        = (open $db | query db "SELECT white, black, white_elo, black_elo, result FROM games WHERE game_id = ?" --params [$game_id]).0
-    let player_name = if $perspective == "white" { $game.white } else { $game.black }
-    let player_elo  = if $perspective == "white" { $game.white_elo } else { $game.black_elo }
+    let info        = match $perspective {
+        "white" => {name: $game.white, elo: $game.white_elo}
+        _       => {name: $game.black, elo: $game.black_elo}
+    }
+    let player_name = $info.name
+    let player_elo  = $info.elo
 
     let anomalies = (open $db | query db "
         SELECT ply, anomaly_type, concept_name, z_score, severity
