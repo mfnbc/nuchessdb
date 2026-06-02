@@ -153,6 +153,16 @@ def init-db [db: string] {
     " | ignore
 
     open $db | query db "
+        CREATE TABLE IF NOT EXISTS openings (
+            fen   TEXT PRIMARY KEY,
+            eco   TEXT NOT NULL,
+            name  TEXT NOT NULL,
+            moves TEXT
+        )
+    " | ignore
+    open $db | query db "CREATE INDEX IF NOT EXISTS idx_openings_eco ON openings(eco)" | ignore
+
+    open $db | query db "
         CREATE TABLE IF NOT EXISTS move_anomalies (
             alert_id     INTEGER PRIMARY KEY AUTOINCREMENT,
             username     TEXT    NOT NULL,
@@ -176,6 +186,57 @@ def init-db [db: string] {
             ON move_anomalies(username, game_id, ply, concept_name)
         "
     } catch { }
+}
+
+# Download ecoA–E.json from JeffML/eco.json and populate the openings table. No-op if already seeded.
+def seed-openings [db: string] {
+    let existing = (open $db | query db "SELECT COUNT(*) as cnt FROM openings").0.cnt | into int
+    if $existing > 0 { return }
+    print "Downloading ECO opening data from JeffML/eco.json..."
+    let base = "https://raw.githubusercontent.com/JeffML/eco.json/master"
+    let rows = ["ecoA" "ecoB" "ecoC" "ecoD" "ecoE"] | par-each { |f|
+        try {
+            http get $"($base)/($f).json"
+            | items { |fen, data| {
+                fen:   $fen
+                eco:   ($data.eco?   | default "")
+                name:  ($data.name?  | default "")
+                moves: ($data.moves? | default "")
+            }}
+        } catch { [] }
+    } | flatten
+    if ($rows | is-empty) {
+        print "Warning: ECO download failed — opening enrichment disabled."
+        return
+    }
+    db-merge $db "openings" $rows ["fen" "eco" "name" "moves"]
+    print $"Seeded ($rows | length) ECO opening positions."
+}
+
+# Update games.eco and games.opening to the deepest opening FEN match per game.
+def enrich-openings [db: string] {
+    let has_data = (open $db | query db "SELECT COUNT(*) as cnt FROM openings").0.cnt | into int
+    if $has_data == 0 { return }
+    open $db | query db "
+        UPDATE games
+        SET eco     = best.eco,
+            opening = best.name
+        FROM (
+            SELECT m.game_id, o.eco, o.name
+            FROM moves m
+            JOIN positions p ON m.next_position_id = p.zobrist
+            JOIN openings  o ON p.fen = o.fen
+            WHERE m.ply = (
+                SELECT MAX(m2.ply)
+                FROM moves m2
+                JOIN positions p2 ON m2.next_position_id = p2.zobrist
+                JOIN openings  o2 ON p2.fen = o2.fen
+                WHERE m2.game_id = m.game_id
+            )
+            GROUP BY m.game_id
+        ) best
+        WHERE games.game_id = best.game_id
+    " | ignore
 }
 
 # Process a list of game records and merge them into the database.
@@ -254,9 +315,11 @@ def review-game [game_id: int, db: string] {
 
 # ── Subcommands ───────────────────────────────────────────────────────────────
 
-# Initialize the database schema (safe to re-run on an existing database).
+# Initialize the database schema and seed ECO opening data (safe to re-run).
 def "main init" [--db: string = "./chess.db"] {
     init-db $db
+    seed-openings $db
+    enrich-openings $db
     print $"Database ready: ($db)"
 }
 
@@ -281,6 +344,7 @@ def "main sync" [
 
     print $"Processing ($games | length) games..."
     import-records $games $username $db
+    enrich-openings $db
 }
 
 # Show the N most recent games (default 5).
@@ -335,6 +399,15 @@ def "main status" [--db: string = "./chess.db"] {
             SELECT black as player FROM games
         ) GROUP BY player ORDER BY games DESC
     "
+}
+
+# Re-download ECO opening data and re-enrich all games. Use after eco.json updates upstream.
+def "main seed-openings" [--db: string = "./chess.db"] {
+    if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
+    open $db | query db "DELETE FROM openings" | ignore
+    seed-openings $db
+    enrich-openings $db
+    print "Opening enrichment complete."
 }
 
 # Compute per-player Welford baselines, z-score anomalies, and state transitions.
