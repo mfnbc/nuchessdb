@@ -501,7 +501,8 @@ export def "derive-coach" [
 export def "coach-profile" [
     username: string
     --db: string = "./chess.db"
-    --examples: int = 3   # concept position examples to include
+    --examples: int = 3        # concept position examples to include
+    --blunder-threshold: int = 150  # min severity (cp) to count as a blunder
 ] {
     if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
 
@@ -561,6 +562,11 @@ export def "coach-profile" [
         SELECT COUNT(*) as cnt FROM move_anomalies
         WHERE username = ? AND consumed = 0 AND hurt_player = 1
     " --params [$username]).0.cnt | into int
+
+    let blunder_count = (open $db | query db "
+        SELECT COUNT(*) as cnt FROM move_anomalies
+        WHERE username = ? AND consumed = 0 AND hurt_player = 1 AND severity >= ?
+    " --params [$username, $blunder_threshold]).0.cnt | into int
 
     let anomalies = (open $db | query db "
         SELECT ma.game_id, ma.ply,
@@ -642,8 +648,12 @@ export def "coach-profile" [
         | sort-by occurrences --reverse
     } else { [] }
 
-    let blunders_per_game = if $game_count > 0 {
+    let hurt_anomalies_per_game = if $game_count > 0 {
         ($hurt_count | into float) / $game_count | math round --precision 2
+    } else { 0.0 }
+
+    let blunders_per_game = if $game_count > 0 {
+        ($blunder_count | into float) / $game_count | math round --precision 2
     } else { 0.0 }
 
     let concept_examples = if $examples > 0 and ($concepts | length) > 0 {
@@ -666,8 +676,10 @@ export def "coach-profile" [
         player:               $username
         games:                $game_count
         results_by_color:     $wl_by_color
-        unreviewed_anomalies: $anomaly_count
-        blunders_per_game:    $blunders_per_game
+        unreviewed_anomalies:    $anomaly_count
+        hurt_anomalies_per_game: $hurt_anomalies_per_game
+        blunders_per_game:       $blunders_per_game
+        blunder_threshold_cp:    $blunder_threshold
         phase_profile:        $phase_profile
         positional_components: $positional
         concepts:             $concepts
