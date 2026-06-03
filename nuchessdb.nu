@@ -684,15 +684,12 @@ export def "coach-profile" [
     $profile
 }
 
-# Tactical sub-profile: fork/pin/hanging anomaly breakdown and win-rate correlation.
-# Phase trends, win-rates with/without each pattern. Pipe to `to json -r` for LLM consumption.
-export def "coach-profile-tactical" [
-    username: string
-    --db: string = "./chess.db"
-] {
-    if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
+# ── Tactical KPIs ─────────────────────────────────────────────────────────────
 
-    let concept_summary = (open $db | query db "
+# Anomaly counts, hurt rates, and peak severity for each tactical concept.
+export def "tactical-concepts" [username: string --db: string = "./chess.db"] {
+    if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
+    open $db | query db "
         SELECT concept_name,
                COUNT(*) as anomalies,
                SUM(hurt_player) as hurt_count,
@@ -703,9 +700,13 @@ export def "coach-profile-tactical" [
         WHERE username = ? AND concept_name IN ('fork', 'pin', 'hanging_piece', 'skewer', 'discovered_attack')
         GROUP BY concept_name
         ORDER BY hurt_count DESC
-    " --params [$username])
+    " --params [$username]
+}
 
-    let phase_breakdown = (open $db | query db "
+# Tactical anomalies broken down by game phase.
+export def "tactical-phase-breakdown" [username: string --db: string = "./chess.db"] {
+    if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
+    open $db | query db "
         SELECT ms.phase_bucket,
                CASE ms.phase_bucket WHEN 0 THEN 'deep_endgame' WHEN 1 THEN 'endgame'
                                     WHEN 2 THEN 'midgame'      ELSE 'opening' END as phase_label,
@@ -717,12 +718,15 @@ export def "coach-profile-tactical" [
         WHERE ma.username = ? AND ma.concept_name IN ('fork', 'pin', 'hanging_piece', 'skewer', 'discovered_attack')
         GROUP BY ms.phase_bucket, ma.concept_name
         ORDER BY ms.phase_bucket, hurt_rate DESC
-    " --params [$username])
+    " --params [$username]
+}
 
-    # Split by whose move produced the flag: player's moves vs opponent's moves.
-    # player flags = state_id of positions reached after the player moved.
-    # opponent flags = state_id of positions reached after the opponent moved.
-    let win_rates_raw = (open $db | query db "
+# Win rate with/without each tactical pattern for player and opponent.
+# player flags = state_id of positions reached after the player moved.
+# opponent flags = state_id of positions reached after the opponent moved.
+export def "tactical-win-impact" [username: string --db: string = "./chess.db"] {
+    if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
+    open $db | query db "
         WITH player_flags AS (
             SELECT ms.game_id,
                    MAX((ms.state_id >> 7) & 1) as had_fork,
@@ -765,11 +769,14 @@ export def "coach-profile-tactical" [
         )
         GROUP BY concept, who, present
         ORDER BY concept, who, present
-    " --params [$username, $username, $username, $username, $username, $username])
+    " --params [$username, $username, $username, $username, $username, $username]
+    | win-rate-pivot
+}
 
-    let win_rates = ($win_rates_raw | win-rate-pivot)
-
-    let worst_games = (open $db | query db "
+# Games with the most tactical hurt moves, ordered by severity.
+export def "tactical-worst-games" [username: string --db: string = "./chess.db"] {
+    if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
+    open $db | query db "
         SELECT ma.game_id,
                SUM(CASE WHEN ma.hurt_player = 1 THEN 1 ELSE 0 END) as hurt_moves,
                COUNT(*) as total_anomalies,
@@ -780,29 +787,28 @@ export def "coach-profile-tactical" [
         WHERE ma.username = ? AND ma.concept_name IN ('fork', 'pin', 'hanging_piece', 'skewer', 'discovered_attack') AND ma.consumed = 0
         GROUP BY ma.game_id
         HAVING hurt_moves > 0
-        ORDER BY hurt_moves DESC, peak_z DESC LIMIT 5
-    " --params [$username])
-
-    let result = {
-        player:               $username
-        concept_summary:      $concept_summary
-        phase_breakdown:      $phase_breakdown
-        pattern_win_impact:   $win_rates
-        worst_tactical_games: $worst_games
-    }
-
-    $result
+        ORDER BY hurt_moves DESC, peak_z DESC
+    " --params [$username]
 }
 
-# Precision sub-profile: eval-swing baselines, blunder trends, and risky transitions.
-# Blunder distribution by phase, top anomalies by z_score. Pipe to `to json -r` for LLM consumption.
-export def "coach-profile-precision" [
-    username: string
-    --db: string = "./chess.db"
-] {
+# Tactical report: all tactical KPIs bundled. Pipe to `to json -r` for LLM consumption.
+export def "coach-profile-tactical" [username: string --db: string = "./chess.db"] {
     if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
+    {
+        player:               $username
+        concept_summary:      (tactical-concepts        $username --db $db)
+        phase_breakdown:      (tactical-phase-breakdown $username --db $db)
+        pattern_win_impact:   (tactical-win-impact      $username --db $db)
+        worst_tactical_games: (tactical-worst-games     $username --db $db)
+    }
+}
 
-    let swing_baselines = (open $db | query db "
+# ── Precision KPIs ─────────────────────────────────────────────────────────────
+
+# Eval-swing baselines (mean and std of hugm_delta) per phase.
+export def "precision-baselines" [username: string --db: string = "./chess.db"] {
+    if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
+    open $db | query db "
         SELECT phase_bucket,
                CASE phase_bucket WHEN 0 THEN 'deep_endgame' WHEN 1 THEN 'endgame'
                                  WHEN 2 THEN 'midgame'      ELSE 'opening' END as phase_label,
@@ -810,9 +816,13 @@ export def "coach-profile-precision" [
         FROM player_baselines
         WHERE username = ? AND concept_name = 'hugm_delta'
         ORDER BY phase_bucket
-    " --params [$username])
+    " --params [$username]
+}
 
-    let severity_dist = (open $db | query db "
+# Distribution of anomaly severity tiers (borderline / notable / major / extreme).
+export def "precision-severity" [username: string --db: string = "./chess.db"] {
+    if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
+    open $db | query db "
         SELECT
             CASE
                 WHEN z_score < 3.0 THEN 'borderline (z 2-3)'
@@ -827,9 +837,13 @@ export def "coach-profile-precision" [
         WHERE username = ? AND concept_name = 'hugm_delta'
         GROUP BY tier
         ORDER BY MIN(z_score)
-    " --params [$username])
+    " --params [$username]
+}
 
-    let blunder_by_phase = (open $db | query db "
+# Blunder count, game count, and severity stats per game phase (severity > 150cp).
+export def "precision-blunder-phases" [username: string --db: string = "./chess.db"] {
+    if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
+    open $db | query db "
         SELECT ms.phase_bucket,
                CASE ms.phase_bucket WHEN 0 THEN 'deep_endgame' WHEN 1 THEN 'endgame'
                                     WHEN 2 THEN 'midgame'      ELSE 'opening' END as phase_label,
@@ -842,47 +856,54 @@ export def "coach-profile-precision" [
         WHERE ma.username = ? AND ma.hurt_player = 1 AND ma.severity > 150
         GROUP BY ms.phase_bucket
         ORDER BY ms.phase_bucket
-    " --params [$username])
+    " --params [$username]
+}
 
-    let risky_transitions = (open $db | query db "
+# State transitions with blunder risk above 15% and at least 3 occurrences.
+export def "precision-risky-transitions" [username: string --db: string = "./chess.db"] {
+    if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
+    open $db | query db "
         SELECT state_from, state_to, total_count, blunder_count,
                ROUND(blunder_risk, 3) as blunder_risk
         FROM transition_events
         WHERE username = ? AND blunder_risk > 0.15 AND total_count >= 3
-        ORDER BY blunder_risk DESC LIMIT 5
-    " --params [$username])
+        ORDER BY blunder_risk DESC
+    " --params [$username]
+}
 
-    let top_anomalies = (open $db | query db "
+# Top unreviewed anomalies ordered by z_score.
+export def "precision-top-anomalies" [username: string --db: string = "./chess.db"] {
+    if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
+    open $db | query db "
         SELECT game_id, ply, concept_name,
                ROUND(z_score, 2) as z_score,
                ROUND(severity, 0) as severity_cp,
                hurt_player
         FROM move_anomalies
         WHERE username = ? AND consumed = 0
-        ORDER BY z_score DESC LIMIT 10
-    " --params [$username])
-
-    let result = {
-        player:             $username
-        swing_baselines:    $swing_baselines
-        severity_dist:      $severity_dist
-        blunder_by_phase:   $blunder_by_phase
-        risky_transitions:  $risky_transitions
-        top_anomalies:      $top_anomalies
-    }
-
-    $result
+        ORDER BY z_score DESC
+    " --params [$username]
 }
 
-# Positional sub-profile: eval component trends (pawns/activity/king-safety).
-# Win-rate when positional patterns are present, positional concept anomalies. Pipe to `to json -r` for LLM consumption.
-export def "coach-profile-position" [
-    username: string
-    --db: string = "./chess.db"
-] {
+# Precision report: all precision KPIs bundled. Pipe to `to json -r` for LLM consumption.
+export def "coach-profile-precision" [username: string --db: string = "./chess.db"] {
     if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
+    {
+        player:            $username
+        swing_baselines:   (precision-baselines          $username --db $db)
+        severity_dist:     (precision-severity           $username --db $db)
+        blunder_by_phase:  (precision-blunder-phases     $username --db $db)
+        risky_transitions: (precision-risky-transitions  $username --db $db)
+        top_anomalies:     (precision-top-anomalies      $username --db $db)
+    }
+}
 
-    let eval_components = (open $db | query db "
+# ── Positional KPIs ────────────────────────────────────────────────────────────
+
+# Average eval components (pawns, activity, king safety) by color and phase.
+export def "position-eval-components" [username: string --db: string = "./chess.db"] {
+    if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
+    open $db | query db "
         SELECT m.color,
             CASE WHEN m.ply <= 12 THEN 'opening'
                  WHEN m.ply <= 30 THEN 'midgame'
@@ -901,9 +922,13 @@ export def "coach-profile-position" [
         WHERE (m.color = 'white' AND g.white = ?) OR (m.color = 'black' AND g.black = ?)
         GROUP BY m.color, phase_label
         ORDER BY m.color, phase_label
-    " --params [$username, $username])
+    " --params [$username, $username]
+}
 
-    let positional_win_rates = (open $db | query db "
+# Win rate when outpost / open-file / passed-pawn / king-exposed patterns are present vs absent.
+export def "position-win-rates" [username: string --db: string = "./chess.db"] {
+    if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
+    open $db | query db "
         WITH player_games AS (
             SELECT g.game_id, g.result,
                    CASE WHEN g.white = ? THEN 'white' ELSE 'black' END as player_color
@@ -937,9 +962,13 @@ export def "coach-profile-position" [
         )
         GROUP BY concept, present
         ORDER BY concept, present
-    " --params [$username, $username, $username])
+    " --params [$username, $username, $username]
+}
 
-    let positional_anomalies = (open $db | query db "
+# Anomaly counts and hurt rates for positional concepts (outpost, open file, passed pawn, king exposed).
+export def "position-anomalies" [username: string --db: string = "./chess.db"] {
+    if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
+    open $db | query db "
         SELECT concept_name, COUNT(*) as anomalies,
                ROUND(AVG(CAST(hurt_player AS REAL)), 3) as hurt_rate,
                ROUND(AVG(z_score), 2) as avg_z
@@ -948,38 +977,40 @@ export def "coach-profile-position" [
           AND concept_name IN ('outpost', 'open_file', 'passed_pawn', 'king_exposed')
         GROUP BY concept_name
         ORDER BY anomalies DESC
-    " --params [$username])
-
-    let result = {
-        player:                $username
-        eval_components:       $eval_components
-        positional_win_rates:  $positional_win_rates
-        positional_anomalies:  $positional_anomalies
-    }
-
-    $result
+    " --params [$username]
 }
 
-# Opening sub-profile: ECO repertoire, family win rates, weakest/strongest openings.
-# Which openings correlate with the most anomalies. Pipe to `to json -r` for LLM consumption.
-export def "coach-profile-opening" [
-    username: string
-    --db: string = "./chess.db"
-    --min-games: int = 10   # min games per opening to include in weakness/strength lists
-] {
+# Positional report: all positional KPIs bundled. Pipe to `to json -r` for LLM consumption.
+export def "coach-profile-position" [username: string --db: string = "./chess.db"] {
     if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
+    {
+        player:               $username
+        eval_components:      (position-eval-components $username --db $db)
+        positional_win_rates: (position-win-rates       $username --db $db)
+        positional_anomalies: (position-anomalies       $username --db $db)
+    }
+}
 
-    let repertoire = (open $db | query db "
+# ── Opening KPIs ───────────────────────────────────────────────────────────────
+
+# All openings played by color, ordered by games played.
+export def "opening-repertoire" [username: string --db: string = "./chess.db"] {
+    if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
+    open $db | query db "
         SELECT CASE WHEN white = ? THEN 'white' ELSE 'black' END as color,
                eco, opening, COUNT(*) as games,
                ROUND(100.0 * SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) / COUNT(*), 1) as win_pct,
                ROUND(100.0 * SUM(CASE WHEN result IN ('agreed','repetition','stalemate','insufficient','timevsinsufficient','50move') THEN 1 ELSE 0 END) / COUNT(*), 1) as draw_pct
         FROM games WHERE white = ? OR black = ?
         GROUP BY eco, color
-        ORDER BY games DESC LIMIT 20
-    " --params [$username, $username, $username])
+        ORDER BY games DESC
+    " --params [$username, $username, $username]
+}
 
-    let eco_families = (open $db | query db "
+# Win rate by ECO family (A=flank, B=semi-open, C=open, D=closed, E=Indian).
+export def "opening-eco-families" [username: string --db: string = "./chess.db"] {
+    if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
+    open $db | query db "
         SELECT SUBSTR(eco, 1, 1) as eco_family,
                CASE SUBSTR(eco, 1, 1)
                  WHEN 'A' THEN 'flank'     WHEN 'B' THEN 'semi_open'
@@ -989,9 +1020,17 @@ export def "coach-profile-opening" [
                ROUND(100.0 * SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) / COUNT(*), 1) as win_pct
         FROM games WHERE white = ? OR black = ?
         GROUP BY eco_family ORDER BY games DESC
-    " --params [$username, $username])
+    " --params [$username, $username]
+}
 
-    let weakest = (open $db | query db "
+# Openings with the lowest win rate, filtered by minimum game count.
+export def "opening-weakest" [
+    username: string
+    --db: string = "./chess.db"
+    --min-games: int = 10
+] {
+    if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
+    open $db | query db "
         SELECT eco, opening,
                CASE WHEN white = ? THEN 'white' ELSE 'black' END as color,
                COUNT(*) as games,
@@ -999,9 +1038,17 @@ export def "coach-profile-opening" [
         FROM games WHERE white = ? OR black = ?
         GROUP BY eco, color HAVING games >= ?
         ORDER BY win_pct ASC
-    " --params [$username, $username, $username, $min_games])
+    " --params [$username, $username, $username, $min_games]
+}
 
-    let strongest = (open $db | query db "
+# Openings with the highest win rate, filtered by minimum game count.
+export def "opening-strongest" [
+    username: string
+    --db: string = "./chess.db"
+    --min-games: int = 10
+] {
+    if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
+    open $db | query db "
         SELECT eco, opening,
                CASE WHEN white = ? THEN 'white' ELSE 'black' END as color,
                COUNT(*) as games,
@@ -1009,9 +1056,13 @@ export def "coach-profile-opening" [
         FROM games WHERE white = ? OR black = ?
         GROUP BY eco, color HAVING games >= ?
         ORDER BY win_pct DESC
-    " --params [$username, $username, $username, $min_games])
+    " --params [$username, $username, $username, $min_games]
+}
 
-    let anomaly_by_opening = (open $db | query db "
+# Openings where eval-swing anomalies cluster most, ordered by hurt rate.
+export def "opening-anomalies" [username: string --db: string = "./chess.db"] {
+    if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
+    open $db | query db "
         SELECT g.eco, g.opening,
                COUNT(*) as anomalies,
                COUNT(DISTINCT g.game_id) as games_affected,
@@ -1021,19 +1072,25 @@ export def "coach-profile-opening" [
         JOIN games g ON g.game_id = ma.game_id
         WHERE ma.username = ? AND ma.concept_name = 'hugm_delta'
         GROUP BY g.eco HAVING games_affected >= 3
-        ORDER BY hurt_rate DESC LIMIT 10
-    " --params [$username])
+        ORDER BY hurt_rate DESC
+    " --params [$username]
+}
 
-    let result = {
-        player:               $username
-        repertoire:           $repertoire
-        eco_families:         $eco_families
-        weakest_openings:     $weakest
-        strongest_openings:   $strongest
-        anomaly_by_opening:   $anomaly_by_opening
+# Opening report: all opening KPIs bundled. Pipe to `to json -r` for LLM consumption.
+export def "coach-profile-opening" [
+    username: string
+    --db: string = "./chess.db"
+    --min-games: int = 10
+] {
+    if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
+    {
+        player:             $username
+        repertoire:         (opening-repertoire   $username --db $db)
+        eco_families:       (opening-eco-families $username --db $db)
+        weakest_openings:   (opening-weakest      $username --db $db --min-games $min_games)
+        strongest_openings: (opening-strongest    $username --db $db --min-games $min_games)
+        anomaly_by_opening: (opening-anomalies    $username --db $db)
     }
-
-    $result
 }
 
 # AI Socratic coaching for the key moments in a game.
