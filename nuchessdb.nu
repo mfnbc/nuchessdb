@@ -628,7 +628,7 @@ export def "concept-examples" [username: string --db: string = "./chess.db"] {
 export def "coach-profile" [
     username: string
     --db: string = "./chess.db"
-    --blunder-threshold: int = 150  # min severity (cp) to count as a blunder
+    --hurt-threshold: int = 1000  # min severity to count as a blunder (scale ~135-4500, avg 1500)
 ] {
     if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
 
@@ -646,7 +646,7 @@ export def "coach-profile" [
     let blunder_count = (open $db | query db "
         SELECT COUNT(*) as cnt FROM move_anomalies
         WHERE username = ? AND consumed = 0 AND hurt_player = 1 AND severity >= ?
-    " --params [$username, $blunder_threshold]).0.cnt | into int
+    " --params [$username, $hurt_threshold]).0.cnt | into int
 
     let anomaly_count = (open $db | query db "
         SELECT COUNT(*) as cnt FROM move_anomalies WHERE username = ? AND consumed = 0
@@ -658,7 +658,7 @@ export def "coach-profile" [
         unreviewed_anomalies:     $anomaly_count
         hurt_anomalies_per_game:  (if $game_count > 0 { ($hurt_count | into float) / $game_count | math round --precision 2 } else { 0.0 })
         blunders_per_game:        (if $game_count > 0 { ($blunder_count | into float) / $game_count | math round --precision 2 } else { 0.0 })
-        blunder_threshold_cp:     $blunder_threshold
+        hurt_threshold:           $hurt_threshold
         "profile-results":          (profile-results          $username --db $db)
         "profile-phase-stats":      (profile-phase-stats      $username --db $db)
         "position-eval-components": (position-eval-components $username --db $db)
