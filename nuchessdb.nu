@@ -426,7 +426,7 @@ export def "derive-coach" [
     if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
 
     let rows = (open $db | query db "
-        SELECT m.game_id, m.ply, p.fen, p.hugm_score, p.state_id, m.color,
+        SELECT m.game_id, m.ply, p.fen, p.hugm_score, p.hugm_eval_arr, p.state_id, m.color,
                CASE WHEN m.color = 'white' THEN g.white ELSE g.black END as player
         FROM moves m
         JOIN positions p ON m.next_position_id = p.zobrist
