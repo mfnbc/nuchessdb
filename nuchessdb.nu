@@ -539,24 +539,18 @@ export def "profile-phase-stats" [username: string --db: string = "./chess.db"] 
     " --params [$username, $username]
 }
 
-# Concept baseline summary: occurrence count and average mean severity per concept.
+# Concept baseline summary: actual occurrence count and average mean severity per concept.
 export def "profile-concepts" [username: string --db: string = "./chess.db"] {
     if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
-    let baselines = (open $db | query db "
-        SELECT concept_name, phase_bucket, mean, std
+    open $db | query db "
+        SELECT concept_name as concept,
+               SUM(count) as occurrences,
+               ROUND(AVG(mean), 0) as avg_severity
         FROM player_baselines
         WHERE username = ? AND concept_name != 'hugm_delta'
-        ORDER BY concept_name, phase_bucket
-    " --params [$username])
-    if ($baselines | is-empty) { return [] }
-    $baselines
-    | group-by concept_name
-    | items { |name, rows| {
-        concept:      $name
-        occurrences:  ($rows | length)
-        avg_severity: ($rows | get mean | math avg | math round --precision 0)
-    }}
-    | sort-by occurrences --reverse
+        GROUP BY concept_name
+        ORDER BY occurrences DESC
+    " --params [$username]
 }
 
 # Top unreviewed (game, ply) moments by severity, with king-exposure flag.
