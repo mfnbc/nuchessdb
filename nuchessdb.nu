@@ -539,14 +539,16 @@ export def "profile-phase-stats" [username: string --db: string = "./chess.db"] 
     " --params [$username, $username]
 }
 
-# Concept baseline summary: actual occurrence count and average mean severity per concept.
+# Concept anomaly counts, hurt rate, and average severity from move_anomalies.
 export def "profile-concepts" [username: string --db: string = "./chess.db"] {
     if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
     open $db | query db "
         SELECT concept_name as concept,
-               SUM(count) as occurrences,
-               ROUND(AVG(mean), 0) as avg_severity
-        FROM player_baselines
+               COUNT(*) as occurrences,
+               SUM(hurt_player) as hurt_count,
+               ROUND(AVG(CAST(hurt_player AS REAL)), 3) as hurt_rate,
+               ROUND(AVG(severity), 0) as avg_severity
+        FROM move_anomalies
         WHERE username = ? AND concept_name != 'hugm_delta'
         GROUP BY concept_name
         ORDER BY occurrences DESC
