@@ -998,7 +998,7 @@ export def "coach-profile-opening" [
                ROUND(100.0 * SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) / COUNT(*), 1) as win_pct
         FROM games WHERE white = ? OR black = ?
         GROUP BY eco, color HAVING games >= ?
-        ORDER BY win_pct ASC LIMIT 8
+        ORDER BY win_pct ASC
     " --params [$username, $username, $username, $min_games])
 
     let strongest = (open $db | query db "
@@ -1008,7 +1008,7 @@ export def "coach-profile-opening" [
                ROUND(100.0 * SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) / COUNT(*), 1) as win_pct
         FROM games WHERE white = ? OR black = ?
         GROUP BY eco, color HAVING games >= ?
-        ORDER BY win_pct DESC LIMIT 8
+        ORDER BY win_pct DESC
     " --params [$username, $username, $username, $min_games])
 
     let anomaly_by_opening = (open $db | query db "
