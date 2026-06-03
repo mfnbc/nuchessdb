@@ -195,7 +195,7 @@ def init-db [db: string] {
 }
 
 # Download ecoA–E.json from JeffML/eco.json and populate the openings table. No-op if already seeded.
-def seed-openings [db: string] {
+def fetch-and-seed-eco [db: string] {
     let existing = (open $db | query db "SELECT COUNT(*) as cnt FROM openings").0.cnt | into int
     if $existing > 0 { return }
     print "Downloading ECO opening data from JeffML/eco.json..."
@@ -324,7 +324,7 @@ def review-game [game_id: int, db: string] {
 # Initialize the database schema and seed ECO opening data (safe to re-run).
 export def "init" [--db: string = "./chess.db"] {
     init-db $db
-    seed-openings $db
+    fetch-and-seed-eco $db
     enrich-openings $db
     print $"Database ready: ($db)"
 }
@@ -411,7 +411,7 @@ export def "status" [--db: string = "./chess.db"] {
 export def "seed-openings" [--db: string = "./chess.db"] {
     if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
     open $db | query db "DELETE FROM openings" | ignore
-    seed-openings $db
+    fetch-and-seed-eco $db
     enrich-openings $db
     print "Opening enrichment complete."
 }
