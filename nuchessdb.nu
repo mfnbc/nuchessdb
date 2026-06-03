@@ -665,7 +665,7 @@ export def "coach-profile" [
         "profile-concepts":         (profile-concepts         $username --db $db)
         "profile-worst-moments":    (profile-worst-moments    $username --db $db | first 5)
         "profile-mate-analysis":    (profile-mate-analysis    $username --db $db)
-        "concept-examples":         (concept-examples         $username --db $db)
+        "concept-examples":         (concept-examples $username --db $db | sort-by z_score --reverse | first 10)
     }
 }
 
