@@ -491,12 +491,11 @@ def "main derive-coach" [
 }
 
 # Show a player's coaching profile: phase performance, concept patterns, worst anomalies.
-# Pipe-friendly: returns the profile record. Pipe to `to json -r` for LLM use.
+# Pipe-friendly: returns the profile record. Pipe to `to json -r` for LLM consumption.
 def "main coach-profile" [
     username: string
     --db: string = "./chess.db"
     --examples: int = 3   # concept position examples to include
-    --json                # output raw JSON instead of a human-readable summary
 ] {
     if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
 
@@ -676,15 +675,14 @@ def "main coach-profile" [
         concept_examples:     $concept_examples
     }
 
-    if $json { $profile | to json -r } else { $profile }
+    $profile
 }
 
 # Tactical sub-profile: fork/pin/hanging anomaly breakdown and win-rate correlation.
-# Phase trends, win-rates with/without each pattern. Pipe to `to json -r` for LLM use.
+# Phase trends, win-rates with/without each pattern. Pipe to `to json -r` for LLM consumption.
 def "main coach-profile-tactical" [
     username: string
     --db: string = "./chess.db"
-    --json            # output raw JSON instead of a human-readable summary
 ] {
     if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
 
@@ -787,15 +785,14 @@ def "main coach-profile-tactical" [
         worst_tactical_games: $worst_games
     }
 
-    if $json { $result | to json -r } else { $result }
+    $result
 }
 
 # Precision sub-profile: eval-swing baselines, blunder trends, and risky transitions.
-# Blunder distribution by phase, top anomalies by z_score. Pipe to `to json -r` for LLM use.
+# Blunder distribution by phase, top anomalies by z_score. Pipe to `to json -r` for LLM consumption.
 def "main coach-profile-precision" [
     username: string
     --db: string = "./chess.db"
-    --json            # output raw JSON instead of a human-readable summary
 ] {
     if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
 
@@ -868,15 +865,14 @@ def "main coach-profile-precision" [
         top_anomalies:      $top_anomalies
     }
 
-    if $json { $result | to json -r } else { $result }
+    $result
 }
 
 # Positional sub-profile: eval component trends (pawns/activity/king-safety).
-# Win-rate when positional patterns are present, positional concept anomalies. Pipe to `to json -r` for LLM use.
+# Win-rate when positional patterns are present, positional concept anomalies. Pipe to `to json -r` for LLM consumption.
 def "main coach-profile-position" [
     username: string
     --db: string = "./chess.db"
-    --json            # output raw JSON instead of a human-readable summary
 ] {
     if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
 
@@ -955,16 +951,15 @@ def "main coach-profile-position" [
         positional_anomalies:  $positional_anomalies
     }
 
-    if $json { $result | to json -r } else { $result }
+    $result
 }
 
 # Opening sub-profile: ECO repertoire, family win rates, weakest/strongest openings.
-# Which openings correlate with the most anomalies. Pipe to `to json -r` for LLM use.
+# Which openings correlate with the most anomalies. Pipe to `to json -r` for LLM consumption.
 def "main coach-profile-opening" [
     username: string
     --db: string = "./chess.db"
     --min-games: int = 10   # min games per opening to include in weakness/strength lists
-    --json                  # output raw JSON instead of a human-readable summary
 ] {
     if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
 
@@ -1032,7 +1027,7 @@ def "main coach-profile-opening" [
         anomaly_by_opening:   $anomaly_by_opening
     }
 
-    if $json { $result | to json -r } else { $result }
+    $result
 }
 
 # AI Socratic coaching for the key moments in a game.

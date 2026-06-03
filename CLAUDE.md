@@ -30,16 +30,18 @@
 ## Structured data output — no conditional print formatting
 
 Commands return structured data (records, tables). Let Nu render it natively.
-Do **not** add `if $json { print ... } else { print sections; $result }` branches
-that manually format output with `print` and `| table`. The idiomatic pattern is:
+Do **not** add `--json` flags or conditional print-formatting branches. Just return
+`$result`. The caller decides how to render:
 
 ```
-if $json { $result | to json -r } else { $result }
+nu nuchessdb.nu coach-profile username              # renders as Nu table
+nu nuchessdb.nu coach-profile username | to json -r # clean JSON for LLM
+nu nuchessdb.nu coach-profile username | get concepts
 ```
 
-The caller decides how to render: pipe to `| get field`, `| table`, `| to json -r`,
-`| select ...`, etc. Avoid string-comparison or grep-style conditioning on output
-format — that belongs to the consumer, not the command.
+**Important:** run via `nu nuchessdb.nu` (in-process), not `./nuchessdb.nu`
+(external). External execution captures rendered stdout as a string, breaking
+`| to json` and other structured-data pipes.
 
 ## SQL vs Nushell aggregation
 
