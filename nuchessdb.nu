@@ -1,10 +1,16 @@
 #!/usr/bin/env nu
 # nuchessdb — chess database and coaching platform
 #
-# Quick start:
-#   nu nuchessdb.nu init
-#   nu nuchessdb.nu sync <chess.com-username>
-#   nu nuchessdb.nu derive-coach <username>
+# Module usage (structured data, pipe-friendly):
+#   use nuchessdb.nu *
+#   init
+#   sync <chess.com-username>
+#   derive-coach <username>
+#   coach-profile <username>
+#   coach-profile <username> | to json -r
+#
+# CLI usage (subprocess, rendered output only):
+#   nu nuchessdb.nu sync <username>
 #   nu nuchessdb.nu coach-profile <username>
 #
 # All commands accept --db <path> to override the default ./chess.db.
@@ -316,7 +322,7 @@ def review-game [game_id: int, db: string] {
 # ── Subcommands ───────────────────────────────────────────────────────────────
 
 # Initialize the database schema and seed ECO opening data (safe to re-run).
-def "main init" [--db: string = "./chess.db"] {
+export def "init" [--db: string = "./chess.db"] {
     init-db $db
     seed-openings $db
     enrich-openings $db
@@ -324,7 +330,7 @@ def "main init" [--db: string = "./chess.db"] {
 }
 
 # Download all chess.com games for a player and store them with HUGM evaluations.
-def "main sync" [
+export def "sync" [
     username: string              # chess.com username
     --db: string = "./chess.db"
     --limit: int                  # fetch only the last N monthly archives
@@ -348,7 +354,7 @@ def "main sync" [
 }
 
 # Show the N most recent games (default 5).
-def "main recent" [
+export def "recent" [
     n: int = 5
     --db: string = "./chess.db"
 ] {
@@ -359,7 +365,7 @@ def "main recent" [
 }
 
 # Move-by-move evaluation breakdown for a game.
-def "main review" [
+export def "review" [
     game_id: int
     --db: string = "./chess.db"
 ] {
@@ -367,7 +373,7 @@ def "main review" [
 }
 
 # Show how often each move was played from a position (identified by Zobrist hash).
-def "main explore" [
+export def "explore" [
     zobrist: string
     --db: string = "./chess.db"
 ] {
@@ -382,7 +388,7 @@ def "main explore" [
 }
 
 # Record counts and per-player game totals.
-def "main status" [--db: string = "./chess.db"] {
+export def "status" [--db: string = "./chess.db"] {
     if not ($db | path exists) { print $"No database at ($db)"; return }
 
     open $db | query db "
@@ -402,7 +408,7 @@ def "main status" [--db: string = "./chess.db"] {
 }
 
 # Re-download ECO opening data and re-enrich all games. Use after eco.json updates upstream.
-def "main seed-openings" [--db: string = "./chess.db"] {
+export def "seed-openings" [--db: string = "./chess.db"] {
     if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
     open $db | query db "DELETE FROM openings" | ignore
     seed-openings $db
@@ -412,7 +418,7 @@ def "main seed-openings" [--db: string = "./chess.db"] {
 
 # Compute per-player Welford baselines, z-score anomalies, and state transitions.
 # Safe to re-run: replaces only this player's derived data.
-def "main derive-coach" [
+export def "derive-coach" [
     username: string
     --db: string = "./chess.db"
     --min-games: int = 25
@@ -492,7 +498,7 @@ def "main derive-coach" [
 
 # Show a player's coaching profile: phase performance, concept patterns, worst anomalies.
 # Pipe-friendly: returns the profile record. Pipe to `to json -r` for LLM consumption.
-def "main coach-profile" [
+export def "coach-profile" [
     username: string
     --db: string = "./chess.db"
     --examples: int = 3   # concept position examples to include
@@ -680,7 +686,7 @@ def "main coach-profile" [
 
 # Tactical sub-profile: fork/pin/hanging anomaly breakdown and win-rate correlation.
 # Phase trends, win-rates with/without each pattern. Pipe to `to json -r` for LLM consumption.
-def "main coach-profile-tactical" [
+export def "coach-profile-tactical" [
     username: string
     --db: string = "./chess.db"
 ] {
@@ -790,7 +796,7 @@ def "main coach-profile-tactical" [
 
 # Precision sub-profile: eval-swing baselines, blunder trends, and risky transitions.
 # Blunder distribution by phase, top anomalies by z_score. Pipe to `to json -r` for LLM consumption.
-def "main coach-profile-precision" [
+export def "coach-profile-precision" [
     username: string
     --db: string = "./chess.db"
 ] {
@@ -870,7 +876,7 @@ def "main coach-profile-precision" [
 
 # Positional sub-profile: eval component trends (pawns/activity/king-safety).
 # Win-rate when positional patterns are present, positional concept anomalies. Pipe to `to json -r` for LLM consumption.
-def "main coach-profile-position" [
+export def "coach-profile-position" [
     username: string
     --db: string = "./chess.db"
 ] {
@@ -956,7 +962,7 @@ def "main coach-profile-position" [
 
 # Opening sub-profile: ECO repertoire, family win rates, weakest/strongest openings.
 # Which openings correlate with the most anomalies. Pipe to `to json -r` for LLM consumption.
-def "main coach-profile-opening" [
+export def "coach-profile-opening" [
     username: string
     --db: string = "./chess.db"
     --min-games: int = 10   # min games per opening to include in weakness/strength lists
@@ -1032,7 +1038,7 @@ def "main coach-profile-opening" [
 
 # AI Socratic coaching for the key moments in a game.
 # Requires nu-agent at ../nu-agent/nu-agent and the chess_coach contract.
-def "main coach-review" [
+export def "coach-review" [
     game_id: int
     --perspective: string = "white"
     --db: string = "./chess.db"
@@ -1103,7 +1109,7 @@ def "main coach-review" [
 }
 
 # Show unreviewed anomalies for a game and mark them as consumed.
-def "main validate-gate" [
+export def "validate-gate" [
     username: string
     game_id: int
     --db: string = "./chess.db"
@@ -1129,22 +1135,4 @@ def "main validate-gate" [
         open $db | query db "UPDATE move_anomalies SET consumed = 1 WHERE alert_id = ?" --params [$id]
     }
     print "Marked as reviewed."
-}
-
-# ── Entry point ───────────────────────────────────────────────────────────────
-
-def main [] {
-    print "nuchessdb — chess database and coaching platform\n"
-    print "USAGE:  nu nuchessdb.nu <command> [options]"
-    print "        All commands accept --db <path>  (default: ./chess.db)\n"
-    scope commands
-    | where name =~ "^main "
-    | sort-by name
-    | each { |cmd|
-        let short = ($cmd.name | str replace "main " "")
-        let first = ($cmd.description | lines).0? | default ""
-        let desc  = if ($first | is-empty) { "" } else { $"  ($first)" }
-        print $"  ($short | fill -a l -w 35)($desc)"
-    }
-    | ignore
 }

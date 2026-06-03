@@ -27,21 +27,24 @@
   player's coaching data, check that the plugin returned at least one non-empty
   signal list to avoid wiping and not replacing.
 
-## Structured data output — no conditional print formatting
+## Structured data output — module usage, no conditional print formatting
+
+`nuchessdb.nu` is a **Nu module**. All public commands are `export def`.
 
 Commands return structured data (records, tables). Let Nu render it natively.
 Do **not** add `--json` flags or conditional print-formatting branches. Just return
 `$result`. The caller decides how to render:
 
 ```
-nu nuchessdb.nu coach-profile username              # renders as Nu table
-nu nuchessdb.nu coach-profile username | to json -r # clean JSON for LLM
-nu nuchessdb.nu coach-profile username | get concepts
+use nuchessdb.nu *
+coach-profile username              # renders as Nu table
+coach-profile username | to json -r # clean JSON for LLM
+coach-profile username | get concepts
 ```
 
-**Important:** run via `nu nuchessdb.nu` (in-process), not `./nuchessdb.nu`
-(external). External execution captures rendered stdout as a string, breaking
-`| to json` and other structured-data pipes.
+**CLI usage** (`nu nuchessdb.nu <cmd>`) spawns a subprocess — structured data
+does **not** cross subprocess boundaries and `| to json -r` will get rendered
+text, not clean JSON. Use module form for any pipeline work.
 
 ## SQL vs Nushell aggregation
 
