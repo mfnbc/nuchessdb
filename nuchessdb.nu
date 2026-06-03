@@ -607,33 +607,27 @@ export def "profile-mate-analysis" [username: string --db: string = "./chess.db"
     " --params [$username, $username, $username, $username]
 }
 
-# Anomaly examples for all concepts, --n per concept. Filter with `| where concept == "..."`.
-export def "concept-examples" [
-    username: string
-    --n: int = 3       # examples per concept
-    --db: string = "./chess.db"
-] {
+# All anomaly examples grouped by concept, ordered by severity. Filter/limit in the pipeline.
+export def "concept-examples" [username: string --db: string = "./chess.db"] {
     if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
-    let concepts = (profile-concepts $username --db $db | get concept)
-    $concepts | each { |cname|
-        open $db | query db "
-            SELECT ? as concept, ma.game_id, ma.ply,
-                   ROUND(MAX(ma.z_score), 2) as z_score,
-                   ROUND(MAX(ma.severity), 0) as severity_cp
-            FROM move_anomalies ma
-            WHERE ma.username = ? AND ma.consumed = 0 AND ma.concept_name = ?
-            GROUP BY ma.game_id, ma.ply ORDER BY severity_cp DESC LIMIT ?
-        " --params [$cname, $username, $cname, $n]
-        | update game_id { into string }
-        | update z_score { math round --precision 2 }
-    } | flatten
+    open $db | query db "
+        SELECT ma.concept_name as concept, ma.game_id, ma.ply,
+               ROUND(MAX(ma.z_score), 2) as z_score,
+               ROUND(MAX(ma.severity), 0) as severity_cp
+        FROM move_anomalies ma
+        WHERE ma.username = ? AND ma.consumed = 0
+          AND ma.concept_name != 'hugm_delta'
+        GROUP BY ma.concept_name, ma.game_id, ma.ply
+        ORDER BY ma.concept_name, severity_cp DESC
+    " --params [$username]
+    | update game_id { into string }
+    | update z_score { math round --precision 2 }
 }
 
 # Show a player's coaching profile. Pipe to `to json -r` for LLM consumption.
 export def "coach-profile" [
     username: string
     --db: string = "./chess.db"
-    --examples: int = 3
     --blunder-threshold: int = 150  # min severity (cp) to count as a blunder
 ] {
     if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
@@ -671,7 +665,7 @@ export def "coach-profile" [
         "profile-concepts":         (profile-concepts         $username --db $db)
         "profile-worst-moments":    (profile-worst-moments    $username --db $db | first 5)
         "profile-mate-analysis":    (profile-mate-analysis    $username --db $db)
-        "concept-examples":         (concept-examples         $username --n $examples --db $db)
+        "concept-examples":         (concept-examples         $username --db $db)
     }
 }
 
