@@ -27,6 +27,20 @@
   player's coaching data, check that the plugin returned at least one non-empty
   signal list to avoid wiping and not replacing.
 
+## Structured data output — no conditional print formatting
+
+Commands return structured data (records, tables). Let Nu render it natively.
+Do **not** add `if $json { print ... } else { print sections; $result }` branches
+that manually format output with `print` and `| table`. The idiomatic pattern is:
+
+```
+if $json { $result | to json -r } else { $result }
+```
+
+The caller decides how to render: pipe to `| get field`, `| table`, `| to json -r`,
+`| select ...`, etc. Avoid string-comparison or grep-style conditioning on output
+format — that belongs to the consumer, not the command.
+
 ## SQL vs Nushell aggregation
 
 Keep aggregation in SQL. The `CASE WHEN m.ply <= 12 THEN 'opening'` phase

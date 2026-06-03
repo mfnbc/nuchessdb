@@ -491,7 +491,7 @@ def "main derive-coach" [
 }
 
 # Show a player's coaching profile: phase performance, concept patterns, worst anomalies.
-# Pipe-friendly: returns the profile record. Use --json for LLM-ready output.
+# Pipe-friendly: returns the profile record. Pipe to `to json -r` for LLM use.
 def "main coach-profile" [
     username: string
     --db: string = "./chess.db"
@@ -676,36 +676,11 @@ def "main coach-profile" [
         concept_examples:     $concept_examples
     }
 
-    if $json {
-        print ($profile | to json -r)
-    } else {
-        print $"── ($username)  |  games: ($game_count)  |  anomalies: ($anomaly_count)  |  blunders/game: ($blunders_per_game) ──"
-        if ($wl_by_color | is-not-empty) {
-            print "\nResults by color:"
-            print ($wl_by_color | table)
-        }
-        if ($concepts | is-not-empty) {
-            print "\nTop concepts:"
-            print ($concepts | first 5 | table)
-        }
-        if ($phase_baselines | is-not-empty) {
-            print "\nPhase performance (centipawns from your perspective):"
-            print ($phase_baselines | select color phase n score_from_player abs_material | table)
-        }
-        if ($anomalies | is-not-empty) {
-            print "\nWorst unreviewed anomalies:"
-            print ($anomalies | table)
-        }
-        if ($mate_analysis | is-not-empty) {
-            print "\nMate-in-1 opportunities:"
-            print ($mate_analysis | table)
-        }
-        $profile
-    }
+    if $json { $profile | to json -r } else { $profile }
 }
 
 # Tactical sub-profile: fork/pin/hanging anomaly breakdown and win-rate correlation.
-# Phase trends, win-rates with/without each pattern. Use --json for LLM-ready output.
+# Phase trends, win-rates with/without each pattern. Pipe to `to json -r` for LLM use.
 def "main coach-profile-tactical" [
     username: string
     --db: string = "./chess.db"
@@ -812,32 +787,11 @@ def "main coach-profile-tactical" [
         worst_tactical_games: $worst_games
     }
 
-    if $json {
-        print ($result | to json -r)
-    } else {
-        print $"── ($username) — tactical profile ──"
-        if ($concept_summary | is-not-empty) {
-            print "\nConcept summary:"
-            print ($concept_summary | table)
-        }
-        if ($phase_breakdown | is-not-empty) {
-            print "\nPhase breakdown:"
-            print ($phase_breakdown | table)
-        }
-        if ($win_rates | is-not-empty) {
-            print "\nPattern win impact:"
-            print ($win_rates | table)
-        }
-        if ($worst_games | is-not-empty) {
-            print "\nWorst tactical games:"
-            print ($worst_games | table)
-        }
-        $result
-    }
+    if $json { $result | to json -r } else { $result }
 }
 
 # Precision sub-profile: eval-swing baselines, blunder trends, and risky transitions.
-# Blunder distribution by phase, top anomalies by z_score. Use --json for LLM-ready output.
+# Blunder distribution by phase, top anomalies by z_score. Pipe to `to json -r` for LLM use.
 def "main coach-profile-precision" [
     username: string
     --db: string = "./chess.db"
@@ -914,36 +868,11 @@ def "main coach-profile-precision" [
         top_anomalies:      $top_anomalies
     }
 
-    if $json {
-        print ($result | to json -r)
-    } else {
-        print $"── ($username) — precision profile ──"
-        if ($swing_baselines | is-not-empty) {
-            print "\nEval-swing baselines (hugm_delta per phase):"
-            print ($swing_baselines | table)
-        }
-        if ($severity_dist | is-not-empty) {
-            print "\nBlunder severity distribution:"
-            print ($severity_dist | table)
-        }
-        if ($blunder_by_phase | is-not-empty) {
-            print "\nBlunders by phase:"
-            print ($blunder_by_phase | table)
-        }
-        if ($risky_transitions | is-not-empty) {
-            print "\nRisky transitions (blunder_risk > 15%):"
-            print ($risky_transitions | table)
-        }
-        if ($top_anomalies | is-not-empty) {
-            print "\nTop anomalies by z_score:"
-            print ($top_anomalies | table)
-        }
-        $result
-    }
+    if $json { $result | to json -r } else { $result }
 }
 
 # Positional sub-profile: eval component trends (pawns/activity/king-safety).
-# Win-rate when positional patterns are present, positional concept anomalies. Use --json for LLM-ready output.
+# Win-rate when positional patterns are present, positional concept anomalies. Pipe to `to json -r` for LLM use.
 def "main coach-profile-position" [
     username: string
     --db: string = "./chess.db"
@@ -1026,28 +955,11 @@ def "main coach-profile-position" [
         positional_anomalies:  $positional_anomalies
     }
 
-    if $json {
-        print ($result | to json -r)
-    } else {
-        print $"── ($username) — positional profile ──"
-        if ($eval_components | is-not-empty) {
-            print "\nEval components by color and phase (centipawns):"
-            print ($eval_components | table)
-        }
-        if ($positional_win_rates | is-not-empty) {
-            print "\nWin rate with/without positional patterns:"
-            print ($positional_win_rates | table)
-        }
-        if ($positional_anomalies | is-not-empty) {
-            print "\nPositional concept anomalies:"
-            print ($positional_anomalies | table)
-        }
-        $result
-    }
+    if $json { $result | to json -r } else { $result }
 }
 
 # Opening sub-profile: ECO repertoire, family win rates, weakest/strongest openings.
-# Which openings correlate with the most anomalies. Use --json for LLM-ready output.
+# Which openings correlate with the most anomalies. Pipe to `to json -r` for LLM use.
 def "main coach-profile-opening" [
     username: string
     --db: string = "./chess.db"
@@ -1120,32 +1032,7 @@ def "main coach-profile-opening" [
         anomaly_by_opening:   $anomaly_by_opening
     }
 
-    if $json {
-        print ($result | to json -r)
-    } else {
-        print $"── ($username) — opening profile ──"
-        if ($repertoire | is-not-empty) {
-            print "\nRepertoire (by games played):"
-            print ($repertoire | table)
-        }
-        if ($eco_families | is-not-empty) {
-            print "\nECO family performance:"
-            print ($eco_families | table)
-        }
-        if ($weakest | is-not-empty) {
-            print $"\nWeakest openings >= ($min_games) games:"
-            print ($weakest | table)
-        }
-        if ($strongest | is-not-empty) {
-            print $"\nStrongest openings >= ($min_games) games:"
-            print ($strongest | table)
-        }
-        if ($anomaly_by_opening | is-not-empty) {
-            print "\nMost anomalous openings:"
-            print ($anomaly_by_opening | table)
-        }
-        $result
-    }
+    if $json { $result | to json -r } else { $result }
 }
 
 # AI Socratic coaching for the key moments in a game.
