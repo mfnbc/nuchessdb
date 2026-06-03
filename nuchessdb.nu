@@ -607,15 +607,15 @@ export def "profile-mate-analysis" [username: string --db: string = "./chess.db"
     " --params [$username, $username, $username, $username]
 }
 
-# Top anomaly examples for the N most common concepts, as a flat table.
+# Anomaly examples for all concepts, --n per concept. Filter with `| where concept == "..."`.
 export def "concept-examples" [
     username: string
     --n: int = 3       # examples per concept
     --db: string = "./chess.db"
 ] {
     if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
-    let top = (profile-concepts $username --db $db | first 3 | get concept)
-    $top | each { |cname|
+    let concepts = (profile-concepts $username --db $db | get concept)
+    $concepts | each { |cname|
         open $db | query db "
             SELECT ? as concept, ma.game_id, ma.ply,
                    ROUND(MAX(ma.z_score), 2) as z_score,
