@@ -500,7 +500,7 @@ export def "derive-coach" [
 
 # Win/loss/draw counts and rates by color.
 # result is stored from the syncing player's perspective (chess.com style).
-export def "profile-results" [username: string --db: string = "./chess.db"] {
+export def "profile-wdl" [username: string --db: string = "./chess.db"] {
     if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
     open $db | query db "
         SELECT color, COUNT(*) as games,
@@ -659,7 +659,7 @@ export def "coach-profile" [
         hurt_anomalies_per_game:  (if $game_count > 0 { ($hurt_count | into float) / $game_count | math round --precision 2 } else { 0.0 })
         blunders_per_game:        (if $game_count > 0 { ($blunder_count | into float) / $game_count | math round --precision 2 } else { 0.0 })
         hurt_threshold:           $hurt_threshold
-        "profile-results":          (profile-results          $username --db $db)
+        "profile-wdl":              (profile-wdl              $username --db $db)
         "profile-phase-stats":      (profile-phase-stats      $username --db $db)
         "position-eval-components": (position-eval-components $username --db $db)
         "profile-concepts":         (profile-concepts         $username --db $db)
