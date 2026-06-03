@@ -721,7 +721,7 @@ def "main coach-profile-tactical" [
                ROUND(AVG(z_score), 2) as avg_z,
                ROUND(MAX(severity), 0) as peak_severity_cp
         FROM move_anomalies
-        WHERE username = ? AND concept_name NOT IN ('hugm_delta')
+        WHERE username = ? AND concept_name IN ('fork', 'pin', 'hanging_piece', 'skewer', 'discovered_attack')
         GROUP BY concept_name
         ORDER BY hurt_count DESC
     " --params [$username])
@@ -735,7 +735,7 @@ def "main coach-profile-tactical" [
                ROUND(AVG(ma.z_score), 2) as avg_z
         FROM move_anomalies ma
         JOIN move_states ms ON ms.game_id = ma.game_id AND ms.ply = ma.ply
-        WHERE ma.username = ? AND ma.concept_name NOT IN ('hugm_delta')
+        WHERE ma.username = ? AND ma.concept_name IN ('fork', 'pin', 'hanging_piece', 'skewer', 'discovered_attack')
         GROUP BY ms.phase_bucket, ma.concept_name
         ORDER BY ms.phase_bucket, hurt_rate DESC
     " --params [$username])
@@ -798,7 +798,7 @@ def "main coach-profile-tactical" [
                ROUND(MAX(ma.severity), 0) as peak_severity_cp,
                GROUP_CONCAT(DISTINCT ma.concept_name) as concepts
         FROM move_anomalies ma
-        WHERE ma.username = ? AND ma.concept_name NOT IN ('hugm_delta') AND ma.consumed = 0
+        WHERE ma.username = ? AND ma.concept_name IN ('fork', 'pin', 'hanging_piece', 'skewer', 'discovered_attack') AND ma.consumed = 0
         GROUP BY ma.game_id
         HAVING hurt_moves > 0
         ORDER BY hurt_moves DESC, peak_z DESC LIMIT 5
@@ -1014,8 +1014,7 @@ def "main coach-profile-position" [
                ROUND(AVG(z_score), 2) as avg_z
         FROM move_anomalies
         WHERE username = ?
-          AND concept_name IN ('outpost','open_file','passed_pawn','king_exposed',
-                               'skewer','discovered_attack')
+          AND concept_name IN ('outpost', 'open_file', 'passed_pawn', 'king_exposed')
         GROUP BY concept_name
         ORDER BY anomalies DESC
     " --params [$username])
@@ -1057,23 +1056,15 @@ def "main coach-profile-opening" [
 ] {
     if not ($db | path exists) { error make {msg: $"Database not found: ($db)"} }
 
-    let as_white = (open $db | query db "
-        SELECT eco, opening, COUNT(*) as games,
+    let repertoire = (open $db | query db "
+        SELECT CASE WHEN white = ? THEN 'white' ELSE 'black' END as color,
+               eco, opening, COUNT(*) as games,
                ROUND(100.0 * SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) / COUNT(*), 1) as win_pct,
                ROUND(100.0 * SUM(CASE WHEN result IN ('agreed','repetition','stalemate','insufficient','timevsinsufficient','50move') THEN 1 ELSE 0 END) / COUNT(*), 1) as draw_pct
-        FROM games WHERE white = ?
-        GROUP BY eco
-        ORDER BY games DESC LIMIT 15
-    " --params [$username])
-
-    let as_black = (open $db | query db "
-        SELECT eco, opening, COUNT(*) as games,
-               ROUND(100.0 * SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) / COUNT(*), 1) as win_pct,
-               ROUND(100.0 * SUM(CASE WHEN result IN ('agreed','repetition','stalemate','insufficient','timevsinsufficient','50move') THEN 1 ELSE 0 END) / COUNT(*), 1) as draw_pct
-        FROM games WHERE black = ?
-        GROUP BY eco
-        ORDER BY games DESC LIMIT 15
-    " --params [$username])
+        FROM games WHERE white = ? OR black = ?
+        GROUP BY eco, color
+        ORDER BY games DESC LIMIT 20
+    " --params [$username, $username, $username])
 
     let eco_families = (open $db | query db "
         SELECT SUBSTR(eco, 1, 1) as eco_family,
@@ -1122,8 +1113,7 @@ def "main coach-profile-opening" [
 
     let result = {
         player:               $username
-        top_as_white:         $as_white
-        top_as_black:         $as_black
+        repertoire:           $repertoire
         eco_families:         $eco_families
         weakest_openings:     $weakest
         strongest_openings:   $strongest
@@ -1134,13 +1124,9 @@ def "main coach-profile-opening" [
         print ($result | to json -r)
     } else {
         print $"── ($username) — opening profile ──"
-        if ($as_white | is-not-empty) {
-            print "\nTop openings as white:"
-            print ($as_white | table)
-        }
-        if ($as_black | is-not-empty) {
-            print "\nTop openings as black:"
-            print ($as_black | table)
+        if ($repertoire | is-not-empty) {
+            print "\nRepertoire (by games played):"
+            print ($repertoire | table)
         }
         if ($eco_families | is-not-empty) {
             print "\nECO family performance:"
