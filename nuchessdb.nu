@@ -463,6 +463,7 @@ export def "derive-coach" [
     if ($signals.baselines | is-not-empty) {
         db-merge $db "player_baselines" (
             $signals.baselines
+            | where player == $username
             | reject player
             | rename --column {concept: concept_name}
             | insert username $username
@@ -475,6 +476,7 @@ export def "derive-coach" [
     if ($signals.anomalies | is-not-empty) {
         db-merge $db "move_anomalies" (
             $signals.anomalies
+            | where player == $username
             | reject player
             | upsert game_id { into int }
             | upsert signed_delta { into int }
