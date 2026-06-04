@@ -197,16 +197,17 @@ fn compute_baselines(rows: &[MoveRecord], states: &[Value]) -> HashMap<(String, 
         }
 
         // Eval-component baselines: per-dimension delta (material, pawns, activity, king_safety)
-        // These are continuous — no binary gate needed.
+        // Skip the first ply of each game (no prior same-player position to compare against).
         if let Some(arr) = &row.eval_arr {
-            let prev = prev_eval_arr.get(&game_key).cloned().unwrap_or_default();
-            for (idx, name) in [(0usize, "material"), (1, "pawn_structure"), (2, "activity"), (3, "king_safety")] {
-                let curr = arr.get(idx).copied().unwrap_or(0);
-                let prv  = prev.get(idx).copied().unwrap_or(0);
-                let comp_delta = (curr - prv).abs() as f64;
-                if comp_delta >= 1.0 {
-                    baselines.entry((row.player.clone(), phase_bucket, name.to_string()))
-                        .or_insert_with(Welford::new).update(comp_delta);
+            if let Some(prev) = prev_eval_arr.get(&game_key) {
+                for (idx, name) in [(0usize, "material"), (1, "pawn_structure"), (2, "activity"), (3, "king_safety")] {
+                    let curr = arr.get(idx).copied().unwrap_or(0);
+                    let prv  = prev.get(idx).copied().unwrap_or(0);
+                    let comp_delta = (curr - prv).abs() as f64;
+                    if comp_delta >= 1.0 {
+                        baselines.entry((row.player.clone(), phase_bucket, name.to_string()))
+                            .or_insert_with(Welford::new).update(comp_delta);
+                    }
                 }
             }
             prev_eval_arr.insert(game_key.clone(), arr.clone());
@@ -262,21 +263,23 @@ fn detect_anomalies(rows: &[MoveRecord], states: &[Value], baselines: &HashMap<(
         }
 
         // Eval-component anomalies: per-dimension delta (continuous, no binary gate)
+        // Skip the first ply of each game — same guard as baselines.
         if let Some(arr) = &row.eval_arr {
-            let prev = prev_eval_arr.get(&game_key).cloned().unwrap_or_default();
-            for (idx, name) in [(0usize, "material"), (1, "pawn_structure"), (2, "activity"), (3, "king_safety")] {
-                let curr = arr.get(idx).copied().unwrap_or(0);
-                let prv  = prev.get(idx).copied().unwrap_or(0);
-                let comp_delta = (curr - prv).abs() as f64;
-                let comp_signed = (curr - prv) as f64;
-                if comp_delta >= 30.0 {
-                    let key = (row.player.clone(), phase_bucket, name.to_string());
-                    if let Some((mean, std)) = baselines.get(&key) {
-                        let z = (comp_delta - mean) / std;
-                        if z > 2.0 {
-                            let hurt_player = (row.color == "white" && comp_signed < 0.0)
-                                || (row.color == "black" && comp_signed > 0.0);
-                            results.push(make_anomaly(&row.player, &row.game_id, row.ply, state_id, name, z, comp_delta, comp_signed, hurt_player, span));
+            if let Some(prev) = prev_eval_arr.get(&game_key) {
+                for (idx, name) in [(0usize, "material"), (1, "pawn_structure"), (2, "activity"), (3, "king_safety")] {
+                    let curr = arr.get(idx).copied().unwrap_or(0);
+                    let prv  = prev.get(idx).copied().unwrap_or(0);
+                    let comp_delta = (curr - prv).abs() as f64;
+                    let comp_signed = (curr - prv) as f64;
+                    if comp_delta >= 30.0 {
+                        let key = (row.player.clone(), phase_bucket, name.to_string());
+                        if let Some((mean, std)) = baselines.get(&key) {
+                            let z = (comp_delta - mean) / std;
+                            if z > 2.0 {
+                                let hurt_player = (row.color == "white" && comp_signed < 0.0)
+                                    || (row.color == "black" && comp_signed > 0.0);
+                                results.push(make_anomaly(&row.player, &row.game_id, row.ply, state_id, name, z, comp_delta, comp_signed, hurt_player, span));
+                            }
                         }
                     }
                 }
