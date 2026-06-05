@@ -12,7 +12,7 @@
 # file so that ai-send's reference to closure-list resolves at compile time.
 
 use ../../ai.nu/ai/config.nu [ai-config-env-tools, ai-config-env-prompts]
-use ../../ai.nu/ai/function.nu [closure-list, closure-run]
+export use ../../ai.nu/ai/function.nu [closure-list, closure-run]
 use ../../ai.nu/ai/base.nu [ai-send]
 use ../../ai.nu/ai/data.nu
 
