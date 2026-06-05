@@ -461,11 +461,9 @@ export def "derive-coach" [
     # Plugin returns {player, phase_bucket, concept, mean, std} — rename concept→concept_name,
     # drop player, inject username.
     if ($signals.baselines | is-not-empty) {
-        let mu_bl = ($signals.baselines | where player == $username)
-        let n_comp = ($mu_bl | where concept =~ 'material|pawn_structure|activity|king_safety' | length)
-        print $"DEBUG baselines for ($username): ($mu_bl | length) total, component: ($n_comp)"
         db-merge $db "player_baselines" (
-            $mu_bl
+            $signals.baselines
+            | where player == $username
             | reject player
             | rename --column {concept: concept_name}
             | insert username $username
