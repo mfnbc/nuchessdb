@@ -9,6 +9,7 @@
 #   $json_pos | chess coach     — enrich a position record (Socratic Coach)
 
 use ../../ai.nu/ai/config.nu [ai-config-env-tools, ai-config-env-prompts]
+use ../../ai.nu/ai/function.nu [closure-list, closure-run]
 use ../../ai.nu/ai/call.nu [ai-do]
 
 const HERE = (path self | path dirname)
