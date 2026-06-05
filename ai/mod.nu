@@ -1,5 +1,5 @@
 # Chess tools and prompts for ai.nu.
-# Load after ai.nu so AI_TOOLS / AI_SESSION are initialised.
+# Load after ai.nu so AI_STATE / AI_SESSION are initialised.
 #
 # export-env registers tool handlers into $env.AI_TOOLS and the two
 # chess prompts into $env.AI_PROMPTS (in-memory; no DB write needed).
@@ -7,14 +7,20 @@
 # Entry commands:
 #   $question | chess analyst   — investigate with all chess tools
 #   $json_pos | chess coach     — enrich a position record (Socratic Coach)
+#
+# Mirrors engine.nu: function.nu must be imported before base.nu in this
+# file so that ai-send's reference to closure-list resolves at compile time.
 
 use ../../ai.nu/ai/config.nu [ai-config-env-tools, ai-config-env-prompts]
 use ../../ai.nu/ai/function.nu [closure-list, closure-run]
-use ../../ai.nu/ai/call.nu [ai-do]
+use ../../ai.nu/ai/base.nu [ai-send]
+use ../../ai.nu/ai/data.nu
 
 const HERE = (path self | path dirname)
 
 export-env {
+    if ($env.AI_TOOLS? | is-empty) { $env.AI_TOOLS = {} }
+
     let db = ($HERE | path join ".." "chess.db")
     let nu_script = ($HERE | path join ".." "nuchessdb.nu")
 
@@ -291,12 +297,18 @@ No concepts → comment on material balance. Check → acknowledge immediately."
 }
 
 export def "chess analyst" [] {
-    $in | ai-do chess-analyst --function [
+    let s = data session
+    let p = ($env.AI_PROMPTS | get chess-analyst)
+    $in | ai-send -s $s --system $p.system --function [
         get_coach_profile get_tactical_profile get_precision_profile
         get_positional_profile get_opening_profile chess_db_schema query_chess_db
-    ]
+    ] --oneshot
+    | get result.content
 }
 
 export def "chess coach" [] {
-    $in | ai-do chess-coach
+    let s = data session
+    let p = ($env.AI_PROMPTS | get chess-coach)
+    $in | to json -r | ai-send -s $s --system $p.system --oneshot
+    | get result.content
 }
