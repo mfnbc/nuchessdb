@@ -12,8 +12,8 @@
 # file so that ai-send's reference to closure-list resolves at compile time.
 
 use ../../ai.nu/ai/config.nu [ai-config-env-tools, ai-config-env-prompts]
-export use ../../ai.nu/ai/function.nu [closure-list, closure-run]
-use ../../ai.nu/ai/base.nu [ai-send]
+use ../../ai.nu/ai/function.nu [closure-list, closure-run]
+use ../../ai.nu/ai/base.nu [ai-send, ai-req, ai-call]
 use ../../ai.nu/ai/data.nu
 
 const HERE = (path self | path dirname)
@@ -296,13 +296,56 @@ No concepts → comment on material balance. Check → acknowledge immediately."
     }
 }
 
+# Tool-loop send that calls closure-list/closure-run from THIS module's scope,
+# bypassing base.nu's unresolved reference to them.
+def chess-send [
+    --session(-s): record
+    --system: string
+    --function(-f): list<any>
+] {
+    let message = $in
+    let s = $session
+    let has_fn = ($s.has_fn? | default 1) > 0
+
+    let fns = if $has_fn and ($function | is-not-empty) {
+        closure-list $function
+    } else { [] }
+
+    mut req = (ai-req $s)
+    if ($system | is-not-empty) {
+        $req = ($req | ai-req $s -r system $system)
+    }
+    $req = ($req | ai-req $s $message)
+    if ($fns | is-not-empty) {
+        $req = ($req | ai-req $s -f $fns)
+    }
+
+    mut r = ($req | ai-call $s)
+
+    if ($fns | is-not-empty) {
+        mut rst = []
+        while ($r.tools | is-not-empty) {
+            $req = ($req | ai-req $s -r assistant $r.content --tool-calls $r.tools)
+            let rt = (closure-run $r.tools)
+            for x in $rt {
+                let msg = if err in $x { $x.err } else { $x.result | to json -rs }
+                $req = ($req | ai-req $s -r tool $msg --tool-call-id $x.id)
+            }
+            $r = ($req | ai-call $s)
+            $rst ++= [$r.content]
+        }
+        return {result: $r, req: $req, messages: $rst}
+    }
+    {result: $r, req: $req}
+}
+
 export def "chess analyst" [] {
     let s = data session
     let p = ($env.AI_PROMPTS | get chess-analyst)
-    $in | ai-send -s $s --system $p.system --function [
+    $in | chess-send -s $s --system $p.system --function [
         get_coach_profile get_tactical_profile get_precision_profile
         get_positional_profile get_opening_profile chess_db_schema query_chess_db
-    ] --oneshot
+    ]
     | get result.content
 }
 
