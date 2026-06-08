@@ -353,7 +353,7 @@ export def "chess analyst" [] {
     let content = $out.result.content
     if ($content | is-not-empty) { return $content }
     # Model gave analysis alongside tool calls; fall back to last captured message.
-    $out.messages? | default [] | filter { is-not-empty } | last? | default ""
+    $out.messages? | default [] | where { is-not-empty } | last? | default ""
 }
 
 export def "chess coach" [] {
