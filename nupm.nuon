@@ -1,0 +1,8 @@
+{
+    name: "chessdb"
+    version: "0.1.0"
+    description: "Chess database and AI coaching platform for Nushell"
+    license: "MIT"
+    type: "module"
+    entrypoint: "chessdb/mod.nu"
+}

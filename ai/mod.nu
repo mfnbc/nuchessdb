@@ -22,7 +22,7 @@ export-env {
     if ($env.AI_TOOLS? | is-empty) { $env.AI_TOOLS = {} }
 
     let db = ($HERE | path join ".." "chess.db")
-    let nu_script = ($HERE | path join ".." "nuchessdb.nu")
+    let nu_script = ($HERE | path join ".." "chessdb")
 
     ai-config-env-tools "get_coach_profile" {
         schema: {
@@ -38,7 +38,7 @@ export-env {
         handler: {|args, _|
             let u = ($args.username? | default "")
             if $u == "" { return "tool error: requires `username`" }
-            let r = (do { ^nu -c $"use '($nu_script)' *; coach-profile '($u)' --db '($db)' | to json -r" } | complete)
+            let r = (do { ^nu -c $"use '($nu_script)' *; chess-profile '($u)' --db '($db)' | to json -r" } | complete)
             if $r.exit_code != 0 { return $"tool error: ($r.stderr | str trim)" }
             $r.stdout | str trim
         }
@@ -58,7 +58,7 @@ export-env {
         handler: {|args, _|
             let u = ($args.username? | default "")
             if $u == "" { return "tool error: requires `username`" }
-            let r = (do { ^nu -c $"use '($nu_script)' *; coach-profile-tactical '($u)' --db '($db)' | to json -r" } | complete)
+            let r = (do { ^nu -c $"use '($nu_script)' *; chess-profile-tactical '($u)' --db '($db)' | to json -r" } | complete)
             if $r.exit_code != 0 { return $"tool error: ($r.stderr | str trim)" }
             $r.stdout | str trim
         }
@@ -78,7 +78,7 @@ export-env {
         handler: {|args, _|
             let u = ($args.username? | default "")
             if $u == "" { return "tool error: requires `username`" }
-            let r = (do { ^nu -c $"use '($nu_script)' *; coach-profile-precision '($u)' --db '($db)' | to json -r" } | complete)
+            let r = (do { ^nu -c $"use '($nu_script)' *; chess-profile-precision '($u)' --db '($db)' | to json -r" } | complete)
             if $r.exit_code != 0 { return $"tool error: ($r.stderr | str trim)" }
             $r.stdout | str trim
         }
@@ -98,7 +98,7 @@ export-env {
         handler: {|args, _|
             let u = ($args.username? | default "")
             if $u == "" { return "tool error: requires `username`" }
-            let r = (do { ^nu -c $"use '($nu_script)' *; coach-profile-position '($u)' --db '($db)' | to json -r" } | complete)
+            let r = (do { ^nu -c $"use '($nu_script)' *; chess-profile-position '($u)' --db '($db)' | to json -r" } | complete)
             if $r.exit_code != 0 { return $"tool error: ($r.stderr | str trim)" }
             $r.stdout | str trim
         }
@@ -118,7 +118,7 @@ export-env {
         handler: {|args, _|
             let u = ($args.username? | default "")
             if $u == "" { return "tool error: requires `username`" }
-            let r = (do { ^nu -c $"use '($nu_script)' *; coach-profile-opening '($u)' --db '($db)' | to json -r" } | complete)
+            let r = (do { ^nu -c $"use '($nu_script)' *; chess-profile-opening '($u)' --db '($db)' | to json -r" } | complete)
             if $r.exit_code != 0 { return $"tool error: ($r.stderr | str trim)" }
             $r.stdout | str trim
         }
@@ -181,7 +181,7 @@ Identity: You help players discover patterns in their own games by querying a
 personal chess database. You are data-driven, curious, and always ground your
 observations in the actual numbers you find.
 
-Database: A SQLite chess database built by nuchessdb. Use chess_db_schema to
+Database: A SQLite chess database built by chessdb.nu. Use chess_db_schema to
 learn the schema before writing any queries.
 
 Key tables and their exact columns:
@@ -248,7 +248,7 @@ Style:
 - Offer a follow-up query when the data raises a natural next question.
 - Never fabricate data — only state what the queries actually returned.
 - If a player is missing, tell the user to run:
-    nu nuchessdb.nu sync <username>"
+    nu -c 'use chessdb *; chess-sync <username>'"
         template: "{{}}"
         placeholder: "[]"
         description: "Chess database analyst with query and profile tools"

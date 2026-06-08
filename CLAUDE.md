@@ -1,6 +1,6 @@
-# nuchessdb — coding guidance for Claude
+# chessdb.nu — coding guidance for Claude
 
-## Nushell idioms (nuchessdb.nu)
+## Nushell idioms (chessdb/)
 
 - **`repeat` over `each { "?" }`** — when you need N copies of a fixed string,
   use `"?" | repeat $n | str join ", "` rather than iterating a list and
@@ -29,22 +29,29 @@
 
 ## Structured data output — module usage, no conditional print formatting
 
-`nuchessdb.nu` is a **Nu module**. All public commands are `export def`.
+`chessdb/` is a **Nu module**. All public commands are `export def` in their
+respective sub-files (`db.nu`, `sync.nu`, `derive.nu`, `profile.nu`) and
+re-exported from `chessdb/mod.nu`.
 
 Commands return structured data (records, tables). Let Nu render it natively.
 Do **not** add `--json` flags or conditional print-formatting branches. Just return
 `$result`. The caller decides how to render:
 
 ```
-use nuchessdb.nu *
-coach-profile username              # renders as Nu table
-coach-profile username | to json -r # clean JSON for LLM
-coach-profile username | get concepts
+use chessdb *
+chess-profile username              # renders as Nu table
+chess-profile username | to json -r # clean JSON for LLM
+chess-profile username | get profile-concepts
 ```
 
-**CLI usage** (`nu nuchessdb.nu <cmd>`) spawns a subprocess — structured data
-does **not** cross subprocess boundaries and `| to json -r` will get rendered
-text, not clean JSON. Use module form for any pipeline work.
+**Subprocess usage** spawns a full Nu process and must `use` the module explicitly:
+
+```
+nu -c "use chessdb *; chess-profile username | to json -r"
+```
+
+Structured data does **not** cross subprocess boundaries without `| to json -r`.
+Use module form (`use chessdb *`) for any interactive pipeline work.
 
 ## SQL vs Nushell aggregation
 
@@ -86,7 +93,7 @@ conditions or range checks.
 
 ## SQL string construction in db-merge
 
-`db-merge` builds INSERT statements by concatenating `$table` and `$columns`
-(both internal literal strings — not user input). This is **not** an injection
-risk. All VALUES are parameterised via `--params`. Do not add escaping or
-restructure this to avoid a non-existent vulnerability.
+`db-merge` (in `chessdb/db.nu`) builds INSERT statements by concatenating
+`$table` and `$columns` (both internal literal strings — not user input).
+This is **not** an injection risk. All VALUES are parameterised via `--params`.
+Do not add escaping or restructure this to avoid a non-existent vulnerability.
