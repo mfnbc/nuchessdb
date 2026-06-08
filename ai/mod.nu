@@ -324,9 +324,11 @@ def chess-send [
 
     if ($fns | is-not-empty) {
         mut rst = []
+        mut iterations = 0
         # Capture any content the first response returned alongside tool calls.
         if ($r.content | is-not-empty) { $rst ++= [$r.content] }
-        while ($r.tools | is-not-empty) {
+        while ($r.tools | is-not-empty) and ($iterations < 25) {
+            $iterations += 1
             $req = ($req | ai-req $s -r assistant $r.content --tool-calls $r.tools)
             let rt = (closure-run $r.tools)
             for x in $rt {
