@@ -38,7 +38,7 @@ export-env {
         handler: {|args, _|
             let u = ($args.username? | default "")
             if $u == "" { return "tool error: requires `username`" }
-            let r = (do { ^nu $nu_script coach-profile $u --db $db --json --examples 0 } | complete)
+            let r = (do { ^nu -c $"use '($nu_script)' *; coach-profile '($u)' --db '($db)' | to json -r" } | complete)
             if $r.exit_code != 0 { return $"tool error: ($r.stderr | str trim)" }
             $r.stdout | str trim
         }
@@ -58,7 +58,7 @@ export-env {
         handler: {|args, _|
             let u = ($args.username? | default "")
             if $u == "" { return "tool error: requires `username`" }
-            let r = (do { ^nu $nu_script coach-profile-tactical $u --db $db } | complete)
+            let r = (do { ^nu -c $"use '($nu_script)' *; coach-profile-tactical '($u)' --db '($db)' | to json -r" } | complete)
             if $r.exit_code != 0 { return $"tool error: ($r.stderr | str trim)" }
             $r.stdout | str trim
         }
@@ -78,7 +78,7 @@ export-env {
         handler: {|args, _|
             let u = ($args.username? | default "")
             if $u == "" { return "tool error: requires `username`" }
-            let r = (do { ^nu $nu_script coach-profile-precision $u --db $db } | complete)
+            let r = (do { ^nu -c $"use '($nu_script)' *; coach-profile-precision '($u)' --db '($db)' | to json -r" } | complete)
             if $r.exit_code != 0 { return $"tool error: ($r.stderr | str trim)" }
             $r.stdout | str trim
         }
@@ -98,7 +98,7 @@ export-env {
         handler: {|args, _|
             let u = ($args.username? | default "")
             if $u == "" { return "tool error: requires `username`" }
-            let r = (do { ^nu $nu_script coach-profile-position $u --db $db } | complete)
+            let r = (do { ^nu -c $"use '($nu_script)' *; coach-profile-position '($u)' --db '($db)' | to json -r" } | complete)
             if $r.exit_code != 0 { return $"tool error: ($r.stderr | str trim)" }
             $r.stdout | str trim
         }
@@ -118,7 +118,7 @@ export-env {
         handler: {|args, _|
             let u = ($args.username? | default "")
             if $u == "" { return "tool error: requires `username`" }
-            let r = (do { ^nu $nu_script coach-profile-opening $u --db $db } | complete)
+            let r = (do { ^nu -c $"use '($nu_script)' *; coach-profile-opening '($u)' --db '($db)' | to json -r" } | complete)
             if $r.exit_code != 0 { return $"tool error: ($r.stderr | str trim)" }
             $r.stdout | str trim
         }
