@@ -320,7 +320,7 @@ def chess-send [
         $req = ($req | ai-req $s -f $fns)
     }
 
-    mut r = ($req | ai-call $s)
+    mut r = ($req | ai-call $s --thinking 0)
 
     if ($fns | is-not-empty) {
         mut rst = []
@@ -331,7 +331,7 @@ def chess-send [
                 let msg = if err in $x { $x.err } else { $x.result | to json -rs }
                 $req = ($req | ai-req $s -r tool $msg --tool-call-id $x.id)
             }
-            $r = ($req | ai-call $s)
+            $r = ($req | ai-call $s --thinking 0)
             $rst ++= [$r.content]
         }
         return {result: $r, req: $req, messages: $rst}
