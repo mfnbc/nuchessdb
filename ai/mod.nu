@@ -324,6 +324,8 @@ def chess-send [
 
     if ($fns | is-not-empty) {
         mut rst = []
+        # Capture any content the first response returned alongside tool calls.
+        if ($r.content | is-not-empty) { $rst ++= [$r.content] }
         while ($r.tools | is-not-empty) {
             $req = ($req | ai-req $s -r assistant $r.content --tool-calls $r.tools)
             let rt = (closure-run $r.tools)
@@ -332,7 +334,7 @@ def chess-send [
                 $req = ($req | ai-req $s -r tool $msg --tool-call-id $x.id)
             }
             $r = ($req | ai-call $s --thinking 0)
-            $rst ++= [$r.content]
+            if ($r.content | is-not-empty) { $rst ++= [$r.content] }
         }
         return {result: $r, req: $req, messages: $rst}
     }
@@ -342,11 +344,14 @@ def chess-send [
 export def "chess analyst" [] {
     let s = data session
     let p = ($env.AI_PROMPTS | get chess-analyst)
-    $in | chess-send -s $s --system $p.system --function [
+    let out = ($in | chess-send -s $s --system $p.system --function [
         get_coach_profile get_tactical_profile get_precision_profile
         get_positional_profile get_opening_profile chess_db_schema query_chess_db
-    ]
-    | get result.content
+    ])
+    let content = $out.result.content
+    if ($content | is-not-empty) { return $content }
+    # Model gave analysis alongside tool calls; fall back to last captured message.
+    $out.messages? | default [] | filter { is-not-empty } | last? | default ""
 }
 
 export def "chess coach" [] {
